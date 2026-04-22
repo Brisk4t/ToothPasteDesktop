@@ -29,9 +29,9 @@ pub enum CurrentScreen {
 }
 
 // The main application widget
-#[derive(Default)]
 pub struct App{
-    currentSelection: u8,
+    CurrentScreen: CurrentScreen,
+    //scurrentSelection: u8,
     exit: bool,
     list_state: ListState,
     //deviceState: DeviceState
@@ -66,6 +66,12 @@ impl App {
             KeyCode::Char('q') | KeyCode::Char('Q') => self.exit = true,
             KeyCode::Down => self.list_state.select_next(),
             KeyCode::Up => self.list_state.select_previous(),
+            KeyCode::Enter => {
+                self.CurrentScreen = match self.list_state.selected().unwrap_or(0) {
+                    0 => CurrentScreen::Connect,
+                    _ => CurrentScreen::Home,
+                };
+            }
             _ => {}
             // Move up and down with arrow keys
         }
@@ -88,7 +94,12 @@ pub fn start_tui() -> std::io::Result<()> {
     let mut terminal = DefaultTerminal::new(backend)?;
 
     // Run the tui
-    let res = ratatui::run(|terminal| App::default().run(terminal));
+    let mut app = App {
+        CurrentScreen: CurrentScreen::Home,
+        exit: false,
+        list_state: ListState::default(),
+    };
+    let res = ratatui::run(|terminal| app.run(terminal));
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), crossterm::terminal::LeaveAlternateScreen, crossterm::event::DisableMouseCapture)?;
