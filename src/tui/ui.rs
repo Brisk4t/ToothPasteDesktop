@@ -59,14 +59,6 @@ pub fn render_parent_container(frame: &mut Frame, app: &mut App, area: Rect) {
 
     frame.render_widget(block, area);
 
-    // let counter_text = Text::from(vec![Line::from(vec![
-    //     "Value: ".into(),
-    //     self.counter.to_string().yellow(),
-    // ])]);
-
-    // Paragraph::new(counter_text)
-    //     .block(block)
-    //     .render(area, buf);
 }
 
 pub fn render_home_screen(frame: &mut Frame, app: &mut App, area: Rect) {
