@@ -8,3 +8,4 @@ toothpaste-desktop-proto = { path = "../toothpaste-desktop-proto" }
 btleplug = { version = "0.12", features = ["serde"] }
 tokio = { version = "1.52.1", features = ["rt-multi-thread", "macros"] }
 notify-rust = "4"
+uuid = { version = "1", features = ["v4"] }

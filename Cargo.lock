@@ -2324,6 +2324,7 @@ dependencies = [
  "notify-rust",
  "tokio",
  "toothpaste-desktop-proto",
+ "uuid",
 ]
 
 [[package]]
