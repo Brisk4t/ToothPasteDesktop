@@ -1,0 +1,3 @@
+[submodule "crates/toothpaste-desktop-proto/ToothPaste"]
+	path = crates/toothpaste-desktop-proto/ToothPaste
+	url = https://github.com/Brisk4t/ToothPaste

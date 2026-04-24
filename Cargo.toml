@@ -3,5 +3,6 @@ members = [
     "crates/toothpaste-desktop-core",
     "crates/toothpaste-desktop-service",
     "crates/toothpaste-desktop-tui",
+    "crates/toothpaste-desktop-proto",
 ]
 resolver = "2"
