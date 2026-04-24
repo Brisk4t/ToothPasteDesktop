@@ -1,10 +1,7 @@
-[package]
-name = "ToothPasteDesktop"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-clap = {version = "4.0", features = ["derive"]}
-ratatui = {version = "0.30.0"}
-crossterm = "0.29.0"
-color-eyre = "0.6.3"
+[workspace]
+members = [
+    "crates/toothpaste-desktop-core",
+    "crates/toothpaste-desktop-service",
+    "crates/toothpaste-desktop-tui",
+]
+resolver = "2"

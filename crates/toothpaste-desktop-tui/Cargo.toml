@@ -1,0 +1,15 @@
+[package]
+name = "toothpaste-desktop-tui"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "toothpaste"
+path = "src/main.rs"
+
+[dependencies]
+toothpaste-desktop-core = { path = "../toothpaste-desktop-core" }
+toothpaste-desktop-service = { path = "../toothpaste-desktop-service" }
+ratatui = { version = "0.30.0" }
+crossterm = "0.29.0"
+tokio = { version = "1.52.1", features = ["rt-multi-thread"] }

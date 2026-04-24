@@ -1,0 +1,8 @@
+[package]
+name = "toothpaste-desktop-service"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+btleplug = { version = "0.12", features = ["serde"] }
+tokio = { version = "1.52.1", features = ["rt-multi-thread"] }

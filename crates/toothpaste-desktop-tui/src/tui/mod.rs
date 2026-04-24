@@ -1,44 +1,34 @@
-
 mod ui;
 use ui::ui;
 
+use toothpaste_desktop_service::ble_scan;
 use std::io;
 
-use clap::Parser;
-use crossterm::{event::{self, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind}, execute, terminal::{disable_raw_mode, enable_raw_mode}};
-use ratatui::{
-    prelude::*,
-    DefaultTerminal, Frame, buffer::Buffer, layout::Rect, style::{Modifier, Stylize}, symbols::border, text::{Line, Text}, widgets::{Block, List, Paragraph, Widget, ListState}
+use crossterm::{
+    event::{self, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
 
-#[derive(Parser)]
-struct Cli {
-    pattern: String,
-    input: std::path::PathBuf,
-}
+use ratatui::{
+    DefaultTerminal, Frame,
+    widgets::ListState,
+};
 
-pub enum DeviceState {
-    Connected,
-    Disconnected,
-    Ready
-}
 pub enum CurrentScreen {
     Home,
     Settings,
-    Connect
+    Connect,
 }
 
-// The main application widget
-pub struct App{
-    CurrentScreen: CurrentScreen,
-    //scurrentSelection: u8,
-    exit: bool,
-    list_state: ListState,
-    //deviceState: DeviceState
+pub struct ToothPasteTUI {
+    pub current_screen: CurrentScreen,
+    pub ble_devices: Vec<String>,
+    pub exit: bool,
+    pub list_state: ListState,
 }
 
-impl App {
-    // Main application loop - continuously call draw() and handle_events() until exit is true
+impl ToothPasteTUI {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> std::io::Result<()> {
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
@@ -47,7 +37,7 @@ impl App {
         Ok(())
     }
 
-    fn draw(&mut self, frame: &mut Frame) { 
+    fn draw(&mut self, frame: &mut Frame) {
         ui(frame, self);
     }
 
@@ -67,24 +57,23 @@ impl App {
             KeyCode::Down => self.list_state.select_next(),
             KeyCode::Up => self.list_state.select_previous(),
             KeyCode::Enter => {
-                self.CurrentScreen = match self.list_state.selected().unwrap_or(0) {
+                self.current_screen = match self.list_state.selected().unwrap_or(0) {
                     0 => CurrentScreen::Connect,
                     _ => CurrentScreen::Home,
                 };
             }
+            KeyCode::Char('s') | KeyCode::Char('S') => self.scan_ble_devices(),
             _ => {}
-            // Move up and down with arrow keys
         }
     }
+
+    pub fn scan_ble_devices(&mut self) {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            self.ble_devices = ble_scan().await.unwrap_or_else(|_| Vec::new());
+        });
+    }
 }
-
-// impl Widget for &mut App {
-//     fn render(self, area: Rect, buf: &mut Buffer) {
-       
-
-//     }
-// }
-
 
 pub fn start_tui() -> std::io::Result<()> {
     enable_raw_mode()?;
@@ -93,19 +82,23 @@ pub fn start_tui() -> std::io::Result<()> {
     let backend = ratatui::backend::CrosstermBackend::new(io::stdout());
     let mut terminal = DefaultTerminal::new(backend)?;
 
-    // Run the tui
-    let mut app = App {
-        CurrentScreen: CurrentScreen::Home,
+    let mut app = ToothPasteTUI {
+        current_screen: CurrentScreen::Home,
         exit: false,
         list_state: ListState::default(),
+        ble_devices: Vec::new(),
     };
     let res = ratatui::run(|terminal| app.run(terminal));
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), crossterm::terminal::LeaveAlternateScreen, crossterm::event::DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        crossterm::terminal::LeaveAlternateScreen,
+        crossterm::event::DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
-    if res .is_err() {
+    if res.is_err() {
         eprintln!("Error: {}", res.err().unwrap());
     }
     Ok(())
