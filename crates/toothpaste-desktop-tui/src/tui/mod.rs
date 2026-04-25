@@ -1,7 +1,7 @@
 mod ui;
 use ui::ui;
 
-use toothpaste_desktop_service::ble_scan;
+use toothpaste_desktop_service::ble_discover_toothpaste;
 use std::io;
 
 use crossterm::{
@@ -70,7 +70,7 @@ impl ToothPasteTUI {
     pub fn scan_ble_devices(&mut self) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            self.ble_devices = ble_scan().await.unwrap_or_else(|_| Vec::new());
+            self.ble_devices = ble_discover_toothpaste().await.unwrap_or_else(|_| Vec::new());
         });
     }
 }

@@ -2,39 +2,139 @@ use std::time::Duration;
 use tokio::time;
 use uuid::{uuid, Uuid};
 
-use btleplug::api::{Central, Manager as _, Peripheral, ScanFilter};
-use btleplug::platform::Manager;
+use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter};
+use btleplug::platform::{Adapter, Manager, Peripheral};
 
 const SERVICE_UUID: Uuid                    = uuid!("19b10000-e8f2-537e-4f6c-d104768a1214");
 const PACKET_CHARACTERISTIC_UUID: Uuid      = uuid!("6856e119-2c7b-455a-bf42-cf7ddd2c5907");
 const HID_SEMAPHORE_CHARACTERISTIC_UUID: Uuid = uuid!("6856e119-2c7b-455a-bf42-cf7ddd2c5908");
 const MAC_ADDRESS_CHARACTERISTIC_UUID: Uuid = uuid!("19b10002-e8f2-537e-4f6c-d104768a1214");
 
-pub async fn ble_scan() -> Result<Vec<String>, btleplug::Error> {
-    let manager = Manager::new().await?;
-    let adapter_list = manager.adapters().await?;
+pub struct BleManager {
+    manager : Manager,
+    adapter: Adapter,
+    found_peripherals: Vec<Peripheral>,
+}
 
-    if adapter_list.is_empty() {
-        eprintln!("No Bluetooth adapters found");
-        return Ok(Vec::new());
+impl BleManager {
+    pub async fn new() -> Result<Self, btleplug::Error> {
+        
+        let manager = Manager::new().await?;
+        let adapter_list = manager.adapters().await?;
+
+        if adapter_list.is_empty() {
+            eprintln!("No Bluetooth adapters found");
+            return Err(btleplug::Error::Other("No Bluetooth adapters found".into()));
+        }
+
+        Ok(Self {
+            manager,
+            adapter: adapter_list.into_iter().next().unwrap(),
+            found_peripherals: Vec::new(),
+        })
     }
+    pub async fn ble_discover_toothpaste(&mut self) -> Result<Vec<String>, btleplug::Error> {
 
-    let mut discovered_devices = Vec::new();
-    for adapter in adapter_list.iter() {
+        let mut discovered_devices: Vec<String> = Vec::new();
         // Directly filtering by service UUID doesn't work reliably
-        adapter.start_scan(ScanFilter::default()).await.expect("Failed to start scan");
+        self.adapter.start_scan(ScanFilter::default()).await.expect("Failed to start scan");
         time::sleep(Duration::from_secs(5)).await;
 
-        let peripherals = adapter.peripherals().await?;
+        let peripherals = self.adapter.peripherals().await?;
         for peripheral in peripherals.iter() {
             let properties = peripheral.properties().await?;
             if let Some(props) = properties {
                 if props.services.contains(&SERVICE_UUID) {
+                    self.found_peripherals.push(peripheral.clone());
                     discovered_devices.push(props.local_name.unwrap_or_default());
                 }
             }
         }
+        Ok(discovered_devices)
     }
 
-    Ok(discovered_devices)
+    pub async fn ble_connect_toothpaste(&mut self, peripheral_name: &str) -> Result<String, Box<dyn std::error::Error>> {
+        // Connect to the device - find peripheral by name
+        let mut peripheral = None;
+        for p in self.found_peripherals.iter() {
+            if let Ok(Some(props)) = p.properties().await {
+                if props.local_name == Some(peripheral_name.into()) {
+                    peripheral = Some(p.clone());
+                    break;
+                }
+            }
+        }
+        let peripheral = peripheral.ok_or("Peripheral not found")?;
+
+        if !peripheral.is_connected().await? {
+            peripheral.connect().await?;
+        }
+
+        // Wait a bit before getting GATT information
+        time::sleep(Duration::from_millis(200)).await;
+
+        // Discover services
+        peripheral.discover_services().await?;
+
+        // Get the service with retry logic
+        let service = self.get_service_with_retry(&peripheral, SERVICE_UUID).await?;
+
+        // Get characteristics with retry logic
+        let packet_char = self.get_characteristic_with_retry(&peripheral, &service, PACKET_CHARACTERISTIC_UUID).await?;
+        let semaphore_char = self.get_characteristic_with_retry(&peripheral, &service, HID_SEMAPHORE_CHARACTERISTIC_UUID).await?;
+        let mac_char = self.get_characteristic_with_retry(&peripheral, &service, MAC_ADDRESS_CHARACTERISTIC_UUID).await?;
+
+        // Read MAC address from the device
+        let mac_data = peripheral.read(&mac_char).await?;
+        let mac_str = mac_data
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
+
+        println!("Connected to device: MAC: {}", mac_str);
+
+        // Subscribe to semaphore characteristic for notifications
+        peripheral.subscribe(&semaphore_char).await?;
+
+        Ok(mac_str)
+    }
+
+    async fn get_service_with_retry(&self, peripheral: &Peripheral, uuid: Uuid) -> Result<btleplug::api::Service, Box<dyn std::error::Error>> {
+        let attempts = 3;
+        for attempt in 0..attempts {
+            match peripheral.services().iter().find(|s| s.uuid == uuid).cloned() {
+                Some(service) => return Ok(service),
+                None => {
+                    if attempt < attempts - 1 {
+                        eprintln!("Retrying service discovery... (attempt {})", attempt + 1);
+                        time::sleep(Duration::from_millis(300)).await;
+                    } else {
+                        return Err("Service not found".into());
+                    }
+                }
+            }
+        }
+        Err("Service not found after retries".into())
+    }
+
+    async fn get_characteristic_with_retry(&self, peripheral: &Peripheral, service: &btleplug::api::Service, uuid: Uuid) -> Result<btleplug::api::Characteristic, Box<dyn std::error::Error>> {
+        let attempts = 3;
+        for attempt in 0..attempts {
+            match service.characteristics.iter().find(|c| c.uuid == uuid).cloned() {
+                Some(characteristic) => return Ok(characteristic),
+                None => {
+                    if attempt < attempts - 1 {
+                        eprintln!("Retrying characteristic discovery... (attempt {})", attempt + 1);
+                        time::sleep(Duration::from_millis(300)).await;
+                    } else {
+                        return Err("Characteristic not found".into());
+                    }
+                }
+            }
+        }
+        Err("Characteristic not found after retries".into())
+    }
 }
+
+
+
