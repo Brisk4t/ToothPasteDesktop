@@ -4,6 +4,7 @@ use crate::toothpaste::{
     KeyboardPacket, KeycodePacket, MouseJigglePacket, MousePacket, RenamePacket, ResponsePacket,
 };
 
+// Create an unencrypted ToothPaste DataPacket from the input string
 pub fn create_unencrypted_packet(input: &str) -> Vec<u8> {
     let text_data = input.as_bytes().to_vec();
     let len = text_data.len() as u32;
