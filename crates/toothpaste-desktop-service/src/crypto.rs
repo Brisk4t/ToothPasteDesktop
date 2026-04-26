@@ -1,6 +1,7 @@
 use crate::storage::StorageService;
 
 use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use hkdf::Hkdf;
 use p256::SecretKey;
 use p256::PublicKey;
@@ -90,7 +91,7 @@ impl EcdhContext {
     ///
     /// # Returns
     /// Our public key in uncompressed format (65 bytes: 0x04 + X + Y)
-    pub fn generate_and_persist_device_keys(&mut self, device_id: &str) -> Result<[u8; 65], Box<dyn Error>> {
+    pub fn generate_device_keys(&mut self, device_id: &str, peer_public_key: &[u8; 65]) -> Result<[u8; 65], Box<dyn Error>> {
         let private_key = SecretKey::random(&mut thread_rng());
         let pub_key_bytes: [u8; 65] = private_key.public_key()
             .to_encoded_point(false)
@@ -101,14 +102,9 @@ impl EcdhContext {
             device_id: device_id.to_string(),
             self_private_key: private_key,
             self_public_key: pub_key_bytes,
-            peer_public_key: [0u8; 65],
+            peer_public_key: *peer_public_key,
             aes_key: None,
         };
-
-        self.storage.set(
-            &format!("session_{}", device_id),
-            &serde_json::to_vec(&session)?,
-        )?;
 
         self.active_session = Some(session);
         Ok(pub_key_bytes)
@@ -168,7 +164,9 @@ impl EcdhContext {
     /// # Returns
     /// Uncompressed key (65 bytes: 0x04 + X + Y)
     pub fn decompress_key(compressed_bytes: &[u8; 33]) -> Result<[u8; 65], Box<dyn Error>> {
-        todo!("Implement P-256 key decompression using p256::EncodedPoint")
+        let public_key = PublicKey::from_sec1_bytes(compressed_bytes)
+            .map_err(|_| "compressed key is not a valid P-256 point")?;
+        Ok(public_key.to_encoded_point(false).as_bytes().try_into()?)
     }
 
     // ============================================================================
@@ -294,11 +292,15 @@ impl EcdhContext {
     ///
     /// # Returns
     /// Our uncompressed public key (65 bytes) to send to peer
-    pub fn process_peer_key_and_generate_shared_secret(
-        &mut self,
-        peer_key_compressed: &[u8; 33],
-    ) -> Result<[u8; 65], Box<dyn Error>> {
-        todo!("Implement full key exchange handshake")
+    pub fn pair_new_device(&mut self, peer_key: &[u8; 33], device_id: &str) 
+        -> Result<[u8; 65], Box<dyn Error>> {
+        
+        let decompressed_key = EcdhContext::decompress_key(peer_key)?;
+        
+        let self_public_key = self.generate_device_keys(device_id, &decompressed_key)?;
+        self.save_session()?;
+
+        Ok(self_public_key)
     }
 
     /// Get a reference to the active session (for testing/debugging)

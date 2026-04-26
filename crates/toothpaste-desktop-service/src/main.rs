@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::path::Path;
-
+use std::io::{self, BufRead};
 
 use p256::ecdh;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -45,8 +45,21 @@ async fn main() {
     
     let mac_address = ble.ble_connect_toothpaste("ToothPaste-Dev").await.unwrap();
 
-    let self_public_key = ecdhContext.generate_and_persist_device_keys(mac_address.as_str()).unwrap();
+    let peer_public_key = enter_pairing_mode();
+    let decoded = BASE64.decode(peer_public_key.trim()).unwrap();
+    let peer_public_key_bytes: [u8; 33] = decoded.try_into().unwrap();
+
+    let self_public_key = ecdhContext.pair_new_device(&peer_public_key_bytes, &mac_address).unwrap();
     let base64_string = BASE64.encode(&self_public_key);
 
     ble.ble_send_unencrypted(&base64_string).await.unwrap();
+}
+
+fn enter_pairing_mode() -> String {
+    let stdin = io::stdin();
+    let mut input = String::new();
+    println!("Enter command (or 'quit' to exit):");
+    stdin.read_line(&mut input).unwrap();
+
+    input
 }
