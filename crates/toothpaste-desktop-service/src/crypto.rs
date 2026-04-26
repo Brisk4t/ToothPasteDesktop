@@ -1,6 +1,10 @@
 use crate::storage::StorageService;
+use toothpaste_desktop_proto::toothpaste::EncryptedData;
 
-use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
+use aes_gcm::{
+    aead::{Aead, AeadCore, OsRng},
+    Aes256Gcm, Key, KeyInit, Nonce,
+};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use hkdf::Hkdf;
 use p256::SecretKey;
@@ -11,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
 use rand::thread_rng;
+
 
 #[derive(Debug)]
 pub struct DeviceNotFoundError(pub String);
@@ -41,6 +46,8 @@ pub struct EcdhSession {
     peer_public_key: [u8; 65],
     #[serde(skip)]
     aes_key: Option<Aes256Gcm>,
+    #[serde(skip)]
+    debug_aes_key_base64: Option<String>,
 }
 
 mod secret_key_serde {
@@ -116,6 +123,7 @@ impl EcdhContext {
             self_public_key: pub_key_bytes,
             peer_public_key: *peer_public_key,
             aes_key: None,
+            debug_aes_key_base64: None,
         };
 
         self.active_session = Some(session);
@@ -137,12 +145,15 @@ impl EcdhContext {
             return Err(Box::new(DeviceNotFoundError(device_id.to_string())));
         }
         
+        Self::print_base64_data("Challenge Data", challenge_data);
+
         let bytes = self.storage.get(&storage_key)?;
         let session: EcdhSession = serde_json::from_slice(&bytes)?;
         let pub_key_bytes = session.self_public_key;
         self.active_session = Some(session);
         let salt = if challenge_data.is_empty() { None } else { Some(challenge_data) };
         self.derive_aes_key(salt)?;
+        self.print_aes_key_debug();
         Ok(pub_key_bytes)
     }
 
@@ -256,7 +267,16 @@ impl EcdhContext {
             session.self_private_key.to_nonzero_scalar(),
             peer_pub.as_affine(),
         );
-        Ok(shared.raw_secret_bytes().as_slice().try_into()?)
+        let shared_secret: [u8; 32] = shared.raw_secret_bytes().as_slice().try_into()?;
+        
+        // Debug print the shared secret
+        let shared_secret_hex = shared_secret.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+        let shared_secret_base64 = BASE64.encode(&shared_secret);
+        println!("Shared Secret Generated:");
+        println!("  Hex: {}", shared_secret_hex);
+        println!("  Base64: {}", shared_secret_base64);
+        
+        Ok(shared_secret)
     }
 
     /// Derive the AES-256-GCM session key via HKDF-SHA256 and store it in the active session.
@@ -267,16 +287,22 @@ impl EcdhContext {
 
         let hk = Hkdf::<Sha256>::new(salt, &shared_secret);
         let mut key_bytes = [0u8; 32];
-        hk.expand(b"toothpaste-desktop-aes-v1", &mut key_bytes)
+        hk.expand(b"aes-gcm-256", &mut key_bytes)
             .map_err(|_| "HKDF expand failed")?;
 
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
+        
+        // Store base64 representation for debugging
+        let key_base64 = BASE64.encode(&key_bytes);
+        
         key_bytes.fill(0); // zeroize before drop
 
-        self.active_session
+        let session = self.active_session
             .as_mut()
-            .ok_or("no active session")?
-            .aes_key = Some(cipher);
+            .ok_or("no active session")?;
+        
+        session.aes_key = Some(cipher);
+        session.debug_aes_key_base64 = Some(key_base64);
 
         Ok(())
     }
@@ -294,11 +320,19 @@ impl EcdhContext {
     ///
     /// # Returns
     /// DataPacket (protobuf) containing: IV (12 bytes) + ciphertext + tag (16 bytes)
-    pub fn encrypt_text(
-        unencrypted_data: &[u8],
-        aes_key: &Aes256Gcm,
-    ) -> Result<DataPacket, Box<dyn Error>> {
-        todo!("Implement AES-GCM encryption")
+    pub fn encrypt_bytes(
+        &self,
+        unencrypted_data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let aes_key = self.active_session.as_ref()
+            .and_then(|s| s.aes_key.as_ref())
+            .ok_or("no active AES session key")?;
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let ciphertext = aes_key
+            .encrypt(&nonce, unencrypted_data)
+            .map_err(|_| "AES-GCM encryption failed")?;
+        let mut out = nonce.to_vec();
+        out.extend(ciphertext);
+        Ok(out)
     }
 
     /// Decrypt ciphertext using AES-GCM with the derived shared secret key
@@ -309,11 +343,20 @@ impl EcdhContext {
     ///
     /// # Returns
     /// Decrypted plaintext as Vec<u8>
-    pub fn decrypt_text(
-        ciphertext_bytes: &[u8],
-        aes_key: &Aes256Gcm,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
-        todo!("Implement AES-GCM decryption")
+    pub fn decrypt_bytes(
+        &self,
+        ciphertext_bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        let aes_key = self.active_session.as_ref()
+            .and_then(|s| s.aes_key.as_ref())
+            .ok_or("no active AES session key")?;
+        const NONCE_LEN: usize = 12;
+        if ciphertext_bytes.len() < NONCE_LEN {
+            return Err("ciphertext too short".into());
+        }
+        let nonce = Nonce::from_slice(&ciphertext_bytes[..NONCE_LEN]);
+        aes_key
+            .decrypt(nonce, &ciphertext_bytes[NONCE_LEN..])
+            .map_err(|_| "AES-GCM decryption failed".into())
     }
 
     // ============================================================================
@@ -347,6 +390,48 @@ impl EcdhContext {
     /// Clear the active session
     pub fn clear_session(&mut self) {
         self.active_session = None;
+    }
+
+    /// Print base64-decoded data in a readable format (hex + ASCII representation)
+    ///
+    /// # Arguments
+    /// * `label` - Label to display (e.g., "Challenge Data")
+    /// * `data` - Decoded byte data to print
+    fn print_base64_data(label: &str, data: &[u8]) {
+        let hex_string = data
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
+        
+        let ascii_repr = data
+            .iter()
+            .map(|&b| if b >= 32 && b < 127 { b as char } else { '.' })
+            .collect::<String>();
+        
+        println!("{}: {} bytes", label, data.len());
+        println!("  Hex: {}", hex_string);
+        println!("  ASCII: {}", ascii_repr);
+    }
+
+    /// Print the current AES key in base64 format for debugging
+    /// Only works if `derive_aes_key` has been called to establish an active session
+    pub fn print_aes_key_debug(&self) {
+        match self.active_session.as_ref() {
+            Some(session) => {
+                match &session.debug_aes_key_base64 {
+                    Some(key_base64) => {
+                        println!("AES-256-GCM Key (Base64): {}", key_base64);
+                        println!("AES Key (hex): {}", 
+                            BASE64.decode(key_base64)
+                                .map(|bytes| bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>())
+                                .unwrap_or_else(|_| "ERROR".to_string())
+                        );
+                    },
+                    None => eprintln!("AES key not derived yet or derive_aes_key not called"),
+                }
+            },
+            None => eprintln!("No active session"),
+        }
     }
 }
 

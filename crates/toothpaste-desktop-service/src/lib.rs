@@ -6,7 +6,7 @@ use btleplug::api::{Central, Characteristic, Manager as _, Peripheral as _, Scan
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use futures::StreamExt;
 use toothpaste_desktop_proto::toothpaste::response_packet::ResponseType;
-use toothpaste_desktop_proto::toothpaste::response_packet;
+use toothpaste_desktop_proto::toothpaste::{encrypted_data, response_packet};
 
 pub mod storage;
 pub mod crypto;
@@ -182,6 +182,24 @@ impl BleManager {
 
         self.connected_peripherial.as_ref().unwrap()
             .write(&packet_char, &unencrypted_packet, btleplug::api::WriteType::WithoutResponse).await?;
+        
+        Ok(())
+    }
+
+    pub async fn ble_send_unencrypted_packet(&self, data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+        let packet_char: &Characteristic = &self.cached_peripheral.as_ref().ok_or("No cached peripheral")?.packet_char;
+
+        self.connected_peripherial.as_ref().unwrap()
+            .write(&packet_char, &data, btleplug::api::WriteType::WithoutResponse).await?;
+        
+        Ok(())
+    }
+
+    pub async fn ble_send_encrypted(&self, data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+        let packet_char: &Characteristic = &self.cached_peripheral.as_ref().ok_or("No cached peripheral")?.packet_char;
+
+        self.connected_peripherial.as_ref().unwrap()
+            .write(&packet_char, data, btleplug::api::WriteType::WithoutResponse).await?;
         
         Ok(())
     }

@@ -5,9 +5,10 @@ edition = "2024"
 
 [dependencies]
 toothpaste-desktop-proto = { path = "../toothpaste-desktop-proto" }
+prost = "0.14"
 btleplug = { version = "0.12", features = ["serde"] }
 futures = "0.3"
-tokio = { version = "1.52.1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.52.1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "sync"] }
 notify-rust = "4"
 uuid = { version = "1", features = ["v4"] }
 
