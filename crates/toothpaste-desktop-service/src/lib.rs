@@ -2,20 +2,26 @@ use std::time::Duration;
 use tokio::time;
 use uuid::{uuid, Uuid};
 
+
 use btleplug::api::{Central, Characteristic, Manager as _, Peripheral as _, ScanFilter};
 use btleplug::platform::{Adapter, Manager, Peripheral};
+
+pub mod storage;
+pub mod crypto;
 
 const SERVICE_UUID: Uuid                    = uuid!("19b10000-e8f2-537e-4f6c-d104768a1214");
 const PACKET_CHARACTERISTIC_UUID: Uuid      = uuid!("6856e119-2c7b-455a-bf42-cf7ddd2c5907");
 const HID_SEMAPHORE_CHARACTERISTIC_UUID: Uuid = uuid!("6856e119-2c7b-455a-bf42-cf7ddd2c5908");
 const MAC_ADDRESS_CHARACTERISTIC_UUID: Uuid = uuid!("19b10002-e8f2-537e-4f6c-d104768a1214");
 
+// Struct to cache characteristics after connecting to a peripheral
 pub struct CachedPeripheral{
     packet_char: Characteristic,
     semaphore_char: Characteristic,
     mac_char: Characteristic,
 }
 
+// The main BLE structure to manage Bluetooth operations
 pub struct BleManager {
     manager : Manager,
     adapter: Adapter,
@@ -23,7 +29,6 @@ pub struct BleManager {
     connected_peripherial: Option<Peripheral>,
     cached_peripheral: Option<CachedPeripheral>,
 }
-
 
 
 impl BleManager {
@@ -118,14 +123,6 @@ impl BleManager {
             semaphore_char,
             mac_char,
         });
-
-        // Subscribe to semaphore characteristic for notifications
-        self.connected_peripherial.as_ref().unwrap()
-            .subscribe(&self.cached_peripheral
-                .as_ref()
-                .unwrap()
-                .semaphore_char)
-            .await?;
         
         Ok(mac_str)
     }
@@ -168,10 +165,10 @@ impl BleManager {
         Err("Characteristic not found after retries".into())
     }
 
-    async fn ble_send_unencrypted(&self, data: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn ble_send_unencrypted(&self, data: &str) -> Result<(), Box<dyn std::error::Error>> {
         let unencrypted_packet = toothpaste_desktop_proto::packets::create_unencrypted_packet(data);
         let packet_char: &Characteristic = &self.cached_peripheral.as_ref().ok_or("No cached peripheral")?.packet_char;
-        
+
         self.connected_peripherial.as_ref().unwrap()
             .write(&packet_char, &unencrypted_packet, btleplug::api::WriteType::WithoutResponse).await?;
         
