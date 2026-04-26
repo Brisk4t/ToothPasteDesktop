@@ -9,7 +9,19 @@ use p256::elliptic_curve::sec1::ToEncodedPoint;
 use sha2::Sha256;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::fmt;
 use rand::thread_rng;
+
+#[derive(Debug)]
+pub struct DeviceNotFoundError(pub String);
+
+impl fmt::Display for DeviceNotFoundError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "no persisted session found for device '{}'", self.0)
+    }
+}
+
+impl Error for DeviceNotFoundError {}
 
 use toothpaste_desktop_proto::toothpaste::DataPacket;
 
@@ -110,16 +122,27 @@ impl EcdhContext {
         Ok(pub_key_bytes)
     }
 
-    /// Load persisted ECDH keys for a device from keyring
-    /// Call after initial pairing to restore the device session
+    /// Load persisted ECDH keys for a device from keyring and derive the AES session key.
+    /// Call after initial pairing to restore the device session.
     ///
     /// # Arguments
     /// * `device_id` - Device identifier to load keys for
-    pub fn load_device_keys(&mut self, device_id: &str) -> Result<[u8; 65], Box<dyn Error>> {
-        let bytes = self.storage.get(&format!("session_{}", device_id))?;
+    /// * `challenge_data` - Salt for AES key derivation via HKDF; pass `&[]` to use no salt
+    ///
+    /// # Errors
+    /// Returns `DeviceNotFoundError` if no session exists for `device_id`.
+    pub fn load_device_keys(&mut self, device_id: &str, challenge_data: &[u8]) -> Result<[u8; 65], Box<dyn Error>> {
+        let storage_key = format!("session_{}", device_id);
+        if !self.storage.contains(&storage_key) {
+            return Err(Box::new(DeviceNotFoundError(device_id.to_string())));
+        }
+        
+        let bytes = self.storage.get(&storage_key)?;
         let session: EcdhSession = serde_json::from_slice(&bytes)?;
         let pub_key_bytes = session.self_public_key;
         self.active_session = Some(session);
+        let salt = if challenge_data.is_empty() { None } else { Some(challenge_data) };
+        self.derive_aes_key(salt)?;
         Ok(pub_key_bytes)
     }
 
@@ -136,7 +159,20 @@ impl EcdhContext {
 
     /// Switch the active session by loading the given device's keys from storage
     pub fn set_active_device(&mut self, device_id: &str) -> Result<(), Box<dyn Error>> {
-        self.load_device_keys(device_id).map(|_| ())
+        self.load_device_keys(device_id, &[]).map(|_| ())
+    }
+
+    /// Returns true if a persisted session exists for `device_id`.
+    pub fn has_session(&self, device_id: &str) -> bool {
+        self.storage.contains(&format!("session_{}", device_id))
+    }
+
+    /// Returns the stored self public key for `device_id` without loading the full session
+    /// or deriving the AES key. Used to send a reconnect greeting before the challenge arrives.
+    pub fn get_stored_public_key(&self, device_id: &str) -> Result<[u8; 65], Box<dyn Error>> {
+        let bytes = self.storage.get(&format!("session_{}", device_id))?;
+        let session: EcdhSession = serde_json::from_slice(&bytes)?;
+        Ok(session.self_public_key)
     }
 
     // ============================================================================
