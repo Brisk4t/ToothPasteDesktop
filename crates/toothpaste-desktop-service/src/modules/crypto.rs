@@ -1,5 +1,4 @@
-use crate::storage::StorageService;
-use toothpaste_desktop_proto::toothpaste::EncryptedData;
+use super::storage::StorageService;
 
 use aes_gcm::{
     aead::{Aead, AeadCore, OsRng},
@@ -28,10 +27,8 @@ impl fmt::Display for DeviceNotFoundError {
 
 impl Error for DeviceNotFoundError {}
 
-use toothpaste_desktop_proto::toothpaste::DataPacket;
-
 const ECDH_CURVE: &str = "P-256"; // secp256r1
-    
+
 /// Persisted ECDH key material for a paired device.
 /// The whole struct is serialized as JSON and stored encrypted in the db under "session_{device_id}".
 /// `aes_key` is excluded from serialization — it is re-derived from the shared secret at runtime.
@@ -102,14 +99,8 @@ impl EcdhContext {
     // Identity Key Management (per device pairing)
     // ============================================================================
 
-    /// Generate and persist a new ECDH key pair for a device pairing
-    /// Call once during initial device pairing - keys persist in keyring
-    ///
-    /// # Arguments
-    /// * `device_id` - Unique device identifier (MAC address or device name)
-    ///
-    /// # Returns
-    /// Our public key in uncompressed format (65 bytes: 0x04 + X + Y)
+    /// Generate and persist a new ECDH key pair for a device pairing.
+    /// Call once during initial device pairing — keys persist in keyring.
     pub fn generate_device_keys(&mut self, device_id: &str, peer_public_key: &[u8; 65]) -> Result<[u8; 65], Box<dyn Error>> {
         let private_key = SecretKey::random(&mut thread_rng());
         let pub_key_bytes: [u8; 65] = private_key.public_key()
@@ -133,18 +124,13 @@ impl EcdhContext {
     /// Load persisted ECDH keys for a device from keyring and derive the AES session key.
     /// Call after initial pairing to restore the device session.
     ///
-    /// # Arguments
-    /// * `device_id` - Device identifier to load keys for
-    /// * `challenge_data` - Salt for AES key derivation via HKDF; pass `&[]` to use no salt
-    ///
-    /// # Errors
-    /// Returns `DeviceNotFoundError` if no session exists for `device_id`.
+    /// `challenge_data` is used as HKDF salt; pass `&[]` to use no salt.
     pub fn load_device_keys(&mut self, device_id: &str, challenge_data: &[u8]) -> Result<[u8; 65], Box<dyn Error>> {
         let storage_key = format!("session_{}", device_id);
         if !self.storage.contains(&storage_key) {
             return Err(Box::new(DeviceNotFoundError(device_id.to_string())));
         }
-        
+
         Self::print_base64_data("Challenge Data", challenge_data);
 
         let bytes = self.storage.get(&storage_key)?;
@@ -157,7 +143,7 @@ impl EcdhContext {
         Ok(pub_key_bytes)
     }
 
-    /// Save the current session state back to storage (e.g. after updating peer key or derived AES key)
+    /// Save the current session state back to storage.
     pub fn save_session(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(session) = &self.active_session {
             self.storage.set(
@@ -168,7 +154,7 @@ impl EcdhContext {
         Ok(())
     }
 
-    /// Switch the active session by loading the given device's keys from storage
+    /// Switch the active session by loading the given device's keys from storage.
     pub fn set_active_device(&mut self, device_id: &str) -> Result<(), Box<dyn Error>> {
         self.load_device_keys(device_id, &[]).map(|_| ())
     }
@@ -190,26 +176,12 @@ impl EcdhContext {
     // Key Compression/Decompression
     // ============================================================================
 
-    /// Compress a P-256 public key from uncompressed (65 bytes) to compressed (33 bytes) format
-    /// Uses point compression with prefix 0x02 (even Y) or 0x03 (odd Y)
-    ///
-    /// # Arguments
-    /// * `uncompressed_key` - Uncompressed key (65 bytes: 0x04 + X + Y)
-    ///
-    /// # Returns
-    /// Compressed key (33 bytes: prefix + X coordinate)
+    /// Compress a P-256 public key from uncompressed (65 bytes) to compressed (33 bytes) format.
     pub fn compress_key(uncompressed_key: &[u8; 65]) -> Result<[u8; 33], Box<dyn Error>> {
         todo!("Implement P-256 key compression")
     }
 
-    /// Decompress a compressed P-256 public key (33 bytes) to uncompressed format (65 bytes)
-    /// Uses elliptic curve math to recover the full Y coordinate from the compressed format
-    ///
-    /// # Arguments
-    /// * `compressed_bytes` - Compressed public key (33 bytes: prefix + X coordinate)
-    ///
-    /// # Returns
-    /// Uncompressed key (65 bytes: 0x04 + X + Y)
+    /// Decompress a compressed P-256 public key (33 bytes) to uncompressed format (65 bytes).
     pub fn decompress_key(compressed_bytes: &[u8; 33]) -> Result<[u8; 65], Box<dyn Error>> {
         let public_key = PublicKey::from_sec1_bytes(compressed_bytes)
             .map_err(|_| "compressed key is not a valid P-256 point")?;
@@ -220,35 +192,14 @@ impl EcdhContext {
     // Key Import/Export
     // ============================================================================
 
-    /// Import a peer's uncompressed public key for ECDH operations
-    ///
-    /// # Arguments
-    /// * `raw_key_buffer` - Raw uncompressed public key (65 bytes)
-    ///
-    /// # Returns
-    /// PublicKey object usable for shared secret derivation
     pub fn import_peer_public_key(raw_key_buffer: &[u8; 65]) -> Result<PublicKey, Box<dyn Error>> {
         todo!("Implement peer public key import")
     }
 
-    /// Import a private key in PKCS8 format for ECDH operations
-    ///
-    /// # Arguments
-    /// * `pkcs8_key_buffer` - Private key in PKCS8 format
-    ///
-    /// # Returns
-    /// SecretKey for key derivation operations
     pub fn import_self_private_key(pkcs8_key_buffer: &[u8]) -> Result<SecretKey, Box<dyn Error>> {
         todo!("Implement self private key import from PKCS8")
     }
 
-    /// Import raw AES-GCM key bytes as a CryptoKey for encryption/decryption
-    ///
-    /// # Arguments
-    /// * `key_bytes` - Raw AES key material (32 bytes for 256-bit key)
-    ///
-    /// # Returns
-    /// Aes256Gcm cipher for encryption/decryption operations
     pub fn import_aes_key_from_bytes(key_bytes: &[u8; 32]) -> Result<Aes256Gcm, Box<dyn Error>> {
         todo!("Implement AES-GCM key import")
     }
@@ -268,20 +219,18 @@ impl EcdhContext {
             peer_pub.as_affine(),
         );
         let shared_secret: [u8; 32] = shared.raw_secret_bytes().as_slice().try_into()?;
-        
-        // Debug print the shared secret
+
         let shared_secret_hex = shared_secret.iter().map(|b| format!("{:02x}", b)).collect::<String>();
         let shared_secret_base64 = BASE64.encode(&shared_secret);
         println!("Shared Secret Generated:");
         println!("  Hex: {}", shared_secret_hex);
         println!("  Base64: {}", shared_secret_base64);
-        
+
         Ok(shared_secret)
     }
 
     /// Derive the AES-256-GCM session key via HKDF-SHA256 and store it in the active session.
-    /// The shared secret is derived internally by calling `derive_shared_secret`; it is never
-    /// persisted. `salt` is optional HKDF salt — pass `None` to use the empty salt.
+    /// `salt` is optional HKDF salt — pass `None` to use the empty salt.
     pub fn derive_aes_key(&mut self, salt: Option<&[u8]>) -> Result<(), Box<dyn Error>> {
         let shared_secret = self.derive_shared_secret()?;
 
@@ -291,16 +240,10 @@ impl EcdhContext {
             .map_err(|_| "HKDF expand failed")?;
 
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
-        
-        // Store base64 representation for debugging
         let key_base64 = BASE64.encode(&key_bytes);
-        
-        key_bytes.fill(0); // zeroize before drop
+        key_bytes.fill(0);
 
-        let session = self.active_session
-            .as_mut()
-            .ok_or("no active session")?;
-        
+        let session = self.active_session.as_mut().ok_or("no active session")?;
         session.aes_key = Some(cipher);
         session.debug_aes_key_base64 = Some(key_base64);
 
@@ -311,18 +254,9 @@ impl EcdhContext {
     // Encryption/Decryption
     // ============================================================================
 
-    /// Encrypt data using AES-GCM with the derived shared secret key
-    /// Generates random 12-byte IV and appends authentication tag (16 bytes)
-    ///
-    /// # Arguments
-    /// * `unencrypted_data` - Data to encrypt
-    /// * `aes_key` - AES-GCM cipher
-    ///
-    /// # Returns
-    /// DataPacket (protobuf) containing: IV (12 bytes) + ciphertext + tag (16 bytes)
-    pub fn encrypt_bytes(
-        &self,
-        unencrypted_data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    /// Encrypt `data` with the session AES-GCM key.
+    /// Returns `nonce(12) || ciphertext || tag(16)`.
+    pub fn encrypt_bytes(&self, unencrypted_data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         let aes_key = self.active_session.as_ref()
             .and_then(|s| s.aes_key.as_ref())
             .ok_or("no active AES session key")?;
@@ -335,17 +269,8 @@ impl EcdhContext {
         Ok(out)
     }
 
-    /// Decrypt ciphertext using AES-GCM with the derived shared secret key
-    ///
-    /// # Arguments
-    /// * `ciphertext_bytes` - Encrypted data (IV + ciphertext + tag)
-    /// * `aes_key` - AES-GCM cipher
-    ///
-    /// # Returns
-    /// Decrypted plaintext as Vec<u8>
-    pub fn decrypt_bytes(
-        &self,
-        ciphertext_bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    /// Decrypt `nonce(12) || ciphertext || tag(16)` with the session AES-GCM key.
+    pub fn decrypt_bytes(&self, ciphertext_bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         let aes_key = self.active_session.as_ref()
             .and_then(|s| s.aes_key.as_ref())
             .ok_or("no active AES session key")?;
@@ -363,65 +288,45 @@ impl EcdhContext {
     // Key Exchange Flow
     // ============================================================================
 
-    /// Complete key exchange flow: decompress peer key, generate our key pair,
-    /// derive AES key, and store all keys in active session
-    ///
-    /// # Arguments
-    /// * `peer_key_compressed` - Peer's compressed public key (33 bytes)
-    ///
-    /// # Returns
-    /// Our uncompressed public key (65 bytes) to send to peer
-    pub fn pair_new_device(&mut self, peer_key: &[u8; 33], device_id: &str) 
+    /// Complete pairing flow: decompress peer key, generate our key pair, save session.
+    /// Returns our uncompressed public key (65 bytes) to send back to the peer.
+    pub fn pair_new_device(&mut self, peer_key: &[u8; 33], device_id: &str)
         -> Result<[u8; 65], Box<dyn Error>> {
-        
         let decompressed_key = EcdhContext::decompress_key(peer_key)?;
-        
         let self_public_key = self.generate_device_keys(device_id, &decompressed_key)?;
         self.save_session()?;
-
         Ok(self_public_key)
     }
 
-    /// Get a reference to the active session (for testing/debugging)
+    // ============================================================================
+    // Debug helpers
+    // ============================================================================
+
     pub fn get_active_session(&self) -> Option<&EcdhSession> {
         self.active_session.as_ref()
     }
 
-    /// Clear the active session
     pub fn clear_session(&mut self) {
         self.active_session = None;
     }
 
-    /// Print base64-decoded data in a readable format (hex + ASCII representation)
-    ///
-    /// # Arguments
-    /// * `label` - Label to display (e.g., "Challenge Data")
-    /// * `data` - Decoded byte data to print
     fn print_base64_data(label: &str, data: &[u8]) {
-        let hex_string = data
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>();
-        
-        let ascii_repr = data
-            .iter()
+        let hex_string = data.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+        let ascii_repr = data.iter()
             .map(|&b| if b >= 32 && b < 127 { b as char } else { '.' })
             .collect::<String>();
-        
         println!("{}: {} bytes", label, data.len());
         println!("  Hex: {}", hex_string);
         println!("  ASCII: {}", ascii_repr);
     }
 
-    /// Print the current AES key in base64 format for debugging
-    /// Only works if `derive_aes_key` has been called to establish an active session
     pub fn print_aes_key_debug(&self) {
         match self.active_session.as_ref() {
             Some(session) => {
                 match &session.debug_aes_key_base64 {
                     Some(key_base64) => {
                         println!("AES-256-GCM Key (Base64): {}", key_base64);
-                        println!("AES Key (hex): {}", 
+                        println!("AES Key (hex): {}",
                             BASE64.decode(key_base64)
                                 .map(|bytes| bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>())
                                 .unwrap_or_else(|_| "ERROR".to_string())
