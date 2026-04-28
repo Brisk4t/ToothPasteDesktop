@@ -4,7 +4,7 @@ use uuid::{uuid, Uuid};
 
 use btleplug::api::{Central, Characteristic, Manager as _, Peripheral as _, ScanFilter};
 use btleplug::platform::{Adapter, Manager, Peripheral};
-use futures::StreamExt;
+use futures::{StreamExt, stream::BoxStream};
 use toothpaste_desktop_proto::toothpaste::response_packet::ResponseType;
 use toothpaste_desktop_proto::toothpaste::response_packet;
 
@@ -172,43 +172,16 @@ impl BleManager {
         Ok(())
     }
 
-    pub async fn subscribe_notifications<H: ResponseHandler>(
+    pub async fn subscribe_notifications(
         &self,
-        handler: &mut H,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<futures::stream::BoxStream<'static, btleplug::api::ValueNotification>, Box<dyn std::error::Error>> {
         let peripheral = self.connected_peripherial.as_ref().ok_or("Not connected")?;
         let cached = self.cached_peripheral.as_ref().ok_or("No cached peripheral")?;
         let semchar = &cached.semaphore_char;
-        let packet_char = &cached.packet_char;
 
         peripheral.subscribe(semchar).await?;
-        let mut stream = peripheral.notifications().await?;
-
-        while let Some(notification) = stream.next().await {
-            if notification.uuid != HID_SEMAPHORE_CHARACTERISTIC_UUID {
-                continue;
-            }
-
-            let packet = match toothpaste_desktop_proto::packets::unpack_response_packet(&notification.value) {
-                Ok(p) => p,
-                Err(e) => { eprintln!("Failed to decode ResponsePacket: {e}"); continue; }
-            };
-
-            let response = match response_packet::ResponseType::try_from(packet.response_type) {
-                Ok(ResponseType::Keepalive)   => handler.on_keepalive().await,
-                Ok(ResponseType::PeerUnknown) => handler.on_peer_unknown().await,
-                Ok(ResponseType::PeerKnown)   => handler.on_peer_known(&packet.firmware_version).await,
-                Ok(ResponseType::Challenge)   => handler.on_challenge(&packet.challenge_data, &packet.firmware_version).await,
-                Err(_) => { eprintln!("Unknown response type: {}", packet.response_type); None }
-            };
-
-            if let Some(bytes) = response {
-                if let Err(e) = peripheral.write(packet_char, &bytes, btleplug::api::WriteType::WithoutResponse).await {
-                    eprintln!("Failed to send response packet: {e}");
-                }
-            }
-        }
-
-        Ok(())
+        let stream = peripheral.notifications().await?;
+        
+        Ok(Box::pin(stream))
     }
 }

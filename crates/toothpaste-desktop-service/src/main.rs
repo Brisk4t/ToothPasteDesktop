@@ -59,37 +59,31 @@ async fn main() {
     let stdin = tokio::io::BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
 
-    let result = ble.subscribe_and_handle(|| async {
-        // Called only when the device signals it does not recognise us (PeerUnknown).
-        println!("Device unknown. Enter peer compressed public key (base64):");
-        let input = tokio::task::spawn_blocking(read_line).await.ok()?;
-        let decoded = BASE64.decode(input.trim()).ok()?;
-        decoded.try_into().ok()
-    }); 
+    // Spawn the BLE event loop to handle notifications and commands
+    tokio::spawn(async move {
+        if let Err(e) = ble.run(|| async {
+            // Called only when the device signals it does not recognise us (PeerUnknown).
+            println!("Device unknown. Enter peer compressed public key (base64):");
+            let input = tokio::task::spawn_blocking(read_line).await.ok()?;
+            let decoded = BASE64.decode(input.trim()).ok()?;
+            decoded.try_into().ok()
+        }).await {
+            eprintln!("BLE loop error: {e}");
+        }
+    });
+
+    // Spawn rdev listener thread to capture keyboard/mouse events
+    std::thread::spawn(move || {
+        listen(move |event| {
+            match tx_Fifo.try_send(event) {
+                Ok(_) => {},
+                Err(e) => eprintln!("Failed to queue event: {e}"),
+            };
+        }).ok();
+    });
     
-    // Only continue if subscription was successful, otherwise the device will disconnect immediately and we don't want to start the event loop.
-    match result.await {
-        Ok(_) => {
-            while !matches!(device_rx.borrow().state, DeviceState::Connected{..}) {
-                println!("Waiting for device to connect...");
-            }
-            println!("Device connected, starting event loop...");
-            tokio::spawn(async move {
-                ble.wait_for_command().await;
-                // while let Ok(Some(line)) = lines.next_line().await {
-                //     process_command(&ble, line.trim(), &device_rx).await;
-                // }
-            });
-            // Attach rdev listener
-            listen(move |event| {
-                match tx_Fifo.try_send(event) {
-                    Ok(_) => {},
-                    Err(e) => eprintln!("Failed to send event: {e}"),
-                };
-            }).unwrap();
-        },
-            Err(e) => eprintln!("Subscription failed: {e}"),
-    }
+    // Keep main alive
+    std::future::pending::<()>().await;
 
 }
 

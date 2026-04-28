@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::future::Future;
 use std::sync::Arc;
+use futures::StreamExt;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use prost::Message;
@@ -148,19 +149,14 @@ impl BLEInterface {
 
     // ── Notification loop (fully encapsulated) ────────────────────────────────
 
-    /// Subscribe to device notifications and drive the full pairing/auth/keepalive
-    /// handshake internally.
+    /// Run the main event loop: multiplex between BLE notifications and keyboard/mouse commands.
     ///
     /// `get_peer_key` is called only when the device signals it does not recognise us
     /// (`PeerUnknown`). It should return the device's compressed P-256 public key (33 bytes),
     /// or `None` to abort pairing. All other response types are handled automatically.
     ///
-    /// Takes `&self` so the concurrent stdin-command branch in the select! loop can also
-    /// hold a shared reference and call the `send_*` methods without a borrow conflict.
-    pub async fn subscribe_and_handle<F, Fut>(
-        &self,
-        get_peer_key: F,
-    ) -> Result<(), Box<dyn Error>>
+    /// This loops forever, processing both notification and command events concurrently.
+    pub async fn run<F, Fut>(&mut self, get_peer_key: F) -> Result<(), Box<dyn Error>>
     where
         F: Fn() -> Fut,
         Fut: Future<Output = Option<[u8; 33]>>,
@@ -172,23 +168,49 @@ impl BLEInterface {
             device_observable: &self.device_observable,
             on_peer_unknown: get_peer_key,
         };
-        self.ble.subscribe_notifications(&mut handler).await
+
+        // Subscribe to BLE notifications and get the stream of incoming packets.
+        let mut notification_stream = self.ble.subscribe_notifications().await?;
+
+        loop {
+            // Ownership is not concurrent, the thread that has an action available first will process it while the other awaits.
+            tokio::select! {
+                // Await the next BLE notification and dispatch to the appropriate response handler.
+                Some(notification) = notification_stream.next() => {
+                    if notification.uuid != super::HID_SEMAPHORE_CHARACTERISTIC_UUID {
+                        continue;
+                    }
+
+                    let packet = match toothpaste_desktop_proto::packets::unpack_response_packet(&notification.value) {
+                        Ok(p) => p,
+                        Err(e) => { eprintln!("Failed to decode ResponsePacket: {e}"); continue; }
+                    };
+
+                    let response = match toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::try_from(packet.response_type) {
+                        Ok(toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::Keepalive)   => handler.on_keepalive().await,
+                        Ok(toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::PeerUnknown) => handler.on_peer_unknown().await,
+                        Ok(toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::PeerKnown)   => handler.on_peer_known(&packet.firmware_version).await,
+                        Ok(toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::Challenge)   => handler.on_challenge(&packet.challenge_data, &packet.firmware_version).await,
+                        Err(_) => { eprintln!("Unknown response type: {}", packet.response_type); None }
+                    };
+                    
+                    // Response handlers update state (pairing, auth) but don't write back
+                    let _ = response;
+                }
+                
+                // Await the next keyboard/mouse event from the channel and send it to the device.
+                Some(event) = self.command_rx.recv() => {
+                    if let Some(key) = event.name {
+                        if let Err(e) = self.send_keyboard_string(key.as_str()).await {
+                            eprintln!("Failed to send keyboard event: {e}");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // ── Send helpers (raw data → proto → encrypt → BLE) ──────────────────────
-    pub async fn wait_for_command(&mut self) {
-        let event = self.command_rx.recv().await.unwrap();
-        println!("Received event: {event:?}");
-        match event.name {
-            Some(key) => {
-                print!("KEY_PRESS:{key:?}");
-                self.send_keyboard_string(key.as_str()).await.unwrap();
-            }
-            None => {
-                eprintln!("Unrecognized event: {event:?}");
-            }
-        };
-    }
 
     pub async fn send_keyboard_string(&self, text: &str) -> Result<(), Box<dyn Error>> {
         self.encrypt_and_send(packets::create_keyboard_packet(text)).await
