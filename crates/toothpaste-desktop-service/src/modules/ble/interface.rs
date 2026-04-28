@@ -6,6 +6,8 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use prost::Message;
 use tokio::sync::Mutex;
 use tokio::sync::watch::Sender;
+use tokio::sync::mpsc;
+use rdev::{Event, EventType, Key};
 use toothpaste_desktop_proto::packets::{self, create_unencrypted_packet};
 use toothpaste_desktop_proto::toothpaste::{data_packet, DataPacket, EncryptedData};
 use toothpaste_desktop_core::{Device, DeviceState, AuthState};
@@ -95,13 +97,19 @@ pub struct BLEInterface {
     ecdh: Arc<Mutex<EcdhContext>>,
     device_id: Option<String>,
     device_observable: Sender<Device>,
+    command_rx: mpsc::Receiver<Event>,
 }
 
 impl BLEInterface {
-    pub async fn new(storage: StorageService, device_observable: Sender<Device>) -> Result<Self, Box<dyn Error>> {
+    pub async fn new(storage: StorageService, device_observable: Sender<Device>, command_rx: mpsc::Receiver<Event>) -> Result<Self, Box<dyn Error>> {
         let ble = BleManager::new().await?;
         let ecdh = Arc::new(Mutex::new(EcdhContext::new(storage)));
-        Ok(Self { ble, ecdh, device_id: None, device_observable: device_observable})
+        Ok(Self { 
+            ble, 
+            ecdh, 
+            device_id: None, 
+            device_observable: device_observable, 
+            command_rx: command_rx })
     }
 
     // ── Setup ────────────────────────────────────────────────────────────────
@@ -168,6 +176,19 @@ impl BLEInterface {
     }
 
     // ── Send helpers (raw data → proto → encrypt → BLE) ──────────────────────
+    pub async fn wait_for_command(&mut self) {
+        let event = self.command_rx.recv().await.unwrap();
+        println!("Received event: {event:?}");
+        match event.name {
+            Some(key) => {
+                print!("KEY_PRESS:{key:?}");
+                self.send_keyboard_string(key.as_str()).await.unwrap();
+            }
+            None => {
+                eprintln!("Unrecognized event: {event:?}");
+            }
+        };
+    }
 
     pub async fn send_keyboard_string(&self, text: &str) -> Result<(), Box<dyn Error>> {
         self.encrypt_and_send(packets::create_keyboard_packet(text)).await

@@ -100,6 +100,7 @@ impl BleManager {
         time::sleep(Duration::from_millis(200)).await;
         self.connected_peripherial.as_ref().unwrap().discover_services().await?;
 
+        // Get all characteristics
         let service = self.get_service_with_retry(&peripheral, SERVICE_UUID).await?;
         let packet_char = self.get_characteristic_with_retry(&service, PACKET_CHARACTERISTIC_UUID).await?;
         let semaphore_char = self.get_characteristic_with_retry(&service, HID_SEMAPHORE_CHARACTERISTIC_UUID).await?;
@@ -107,7 +108,7 @@ impl BleManager {
 
         let mac_data = self.connected_peripherial.as_ref().unwrap().read(&mac_char).await?;
         let mac_str = mac_data.iter().map(|b| format!("{:02x}", b)).collect::<String>();
-        println!("Connected to device: MAC: {}", mac_str);
+        println!("Connected to device, MAC: {}", mac_str);
 
         self.cached_peripheral = Some(CachedPeripheral { packet_char, semaphore_char, mac_char });
         Ok(mac_str)
