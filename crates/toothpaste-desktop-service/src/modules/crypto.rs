@@ -27,8 +27,6 @@ impl fmt::Display for DeviceNotFoundError {
 
 impl Error for DeviceNotFoundError {}
 
-const ECDH_CURVE: &str = "P-256"; // secp256r1
-
 /// Persisted ECDH key material for a paired device.
 /// The whole struct is serialized as JSON and stored encrypted in the db under "session_{device_id}".
 /// `aes_key` is excluded from serialization — it is re-derived from the shared secret at runtime.
@@ -176,32 +174,11 @@ impl EcdhContext {
     // Key Compression/Decompression
     // ============================================================================
 
-    /// Compress a P-256 public key from uncompressed (65 bytes) to compressed (33 bytes) format.
-    pub fn compress_key(uncompressed_key: &[u8; 65]) -> Result<[u8; 33], Box<dyn Error>> {
-        todo!("Implement P-256 key compression")
-    }
-
     /// Decompress a compressed P-256 public key (33 bytes) to uncompressed format (65 bytes).
     pub fn decompress_key(compressed_bytes: &[u8; 33]) -> Result<[u8; 65], Box<dyn Error>> {
         let public_key = PublicKey::from_sec1_bytes(compressed_bytes)
             .map_err(|_| "compressed key is not a valid P-256 point")?;
         Ok(public_key.to_encoded_point(false).as_bytes().try_into()?)
-    }
-
-    // ============================================================================
-    // Key Import/Export
-    // ============================================================================
-
-    pub fn import_peer_public_key(raw_key_buffer: &[u8; 65]) -> Result<PublicKey, Box<dyn Error>> {
-        todo!("Implement peer public key import")
-    }
-
-    pub fn import_self_private_key(pkcs8_key_buffer: &[u8]) -> Result<SecretKey, Box<dyn Error>> {
-        todo!("Implement self private key import from PKCS8")
-    }
-
-    pub fn import_aes_key_from_bytes(key_bytes: &[u8; 32]) -> Result<Aes256Gcm, Box<dyn Error>> {
-        todo!("Implement AES-GCM key import")
     }
 
     // ============================================================================
@@ -342,8 +319,7 @@ impl EcdhContext {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
+    
     #[test]
     fn test_key_compression_decompression() {
         todo!("Test compression/decompression roundtrip")

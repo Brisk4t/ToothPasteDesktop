@@ -1,7 +1,6 @@
 mod ui;
 use ui::ui;
 
-use toothpaste_desktop_service::ble_discover_toothpaste;
 use std::io;
 
 use crossterm::{
