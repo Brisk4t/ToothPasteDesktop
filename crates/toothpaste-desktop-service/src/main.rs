@@ -4,9 +4,7 @@ use rdev::{listen, Event, EventType, Key};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use notify_rust::Notification;
-use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
-use tokio::sync::watch::{Receiver, Sender};
 use toothpaste_desktop_service::storage::StorageService;
 use toothpaste_desktop_service::BLEInterface;
 use toothpaste_desktop_core::{Device, DeviceState, AppState, AuthState};
@@ -16,27 +14,22 @@ use toothpaste_desktop_core::{Device, DeviceState, AppState, AuthState};
 #[tokio::main]
 async fn main() {
 
-    let (app_state_tx, mut app_state_rx) = tokio::sync::watch::channel(AppState {
-        app_version: "0.1.0".to_string(),
-        app_string: "ToothPaste Desktop Service".to_string(),
-        devices: Vec::new(),
-        auto_connect: None,
-        connected_device: None,
-        password_protected: false,
-    });
-
-
-    // // The device state is shared between the service and TUI 
-    // let (device_tx, mut device_rx) = tokio::sync::watch::channel(Device {
-    //     name: "Unknown".to_string(),
-    //     address: "N/A".to_string(),
-    //     id: "N/A".to_string(),
-    //     signal_strength: -100,
-    //     state: DeviceState::Disconnected,
-    // });
+    // Shared application state channel used by the BLE interface and the TUI. 
+    // Updated by the BLE interface when devices are discovered/connected and by the TUI when the user selects a device to connect to or changes settings.
+    let (app_state_tx, app_state_rx) = tokio::sync::watch::channel(
+        AppState {
+            app_version: "0.1.0".to_string(),
+            app_string: "ToothPaste Desktop Service".to_string(),
+            devices: Vec::new(),
+            auto_connect: None,
+            connected_device: None,
+            password_protected: false,
+        }
+    );
 
     // Channel for input events from rdev listener
-    let (tx_fifo, mut command_rx) = mpsc::channel::<Event>(50);
+    // TODO: Since its shared by keyboard and mouse, might need a larger buffer or debounce / consume mouse events quicker
+    let (tx_fifo, command_rx) = mpsc::channel::<Event>(50);
     
     // Initialize storage exiting on failure.
     let storage = match StorageService::new(PathBuf::from("toothpaste_storage.json"), None) {
@@ -56,16 +49,6 @@ async fn main() {
         .body("Service is running in the background...")
         .show()
         .unwrap();
-
-    // Synchronized state of the application, shared between the BLE service and the TUI
-    // let mut app_state = AppState {
-    //     app_version: "0.1.0".to_string(),
-    //     app_string: "ToothPaste Desktop Service".to_string(),
-    //     devices: Vec::new(),
-    //     auto_connect: None,
-    //     connected_device: None,
-    //     password_protected: false,
-    // };
 
     // Start BLE scanning and print discovered devices.
     // Updates the shared app state with the list of discovered devices for the TUI to display.
@@ -102,9 +85,6 @@ async fn main() {
         }
     }
 
-    let stdin = tokio::io::BufReader::new(tokio::io::stdin());
-    let mut lines = stdin.lines();
-
     // Spawn the BLE event loop to handle notifications and commands
     // On PeerUnknown, it will prompt the user for input and send the response back to the device.
     // TODO: The pairing flow should be move to the TUI, this is just for testing.
@@ -129,26 +109,6 @@ async fn main() {
         };
     }).ok();
 
-}
-
-// Testing only, will be extracted or drastically changed later.
-async fn process_command(ble: &BLEInterface, line: &str, device_rx: &Receiver<Device>) {
-    match line {
-        "get-state" => {
-                let device = device_rx.borrow();
-                let firmware = match &device.state {
-                    DeviceState::Connected { firmware_version, .. } => firmware_version,
-                    _ => "N/A",
-                };
-                println!("Connected to device: {}, firmware version: {:?}", device.name, firmware);
-
-        },
-        other => {
-            if let Err(e) = ble.send_keyboard_string(other).await {
-                eprintln!("Send failed: {e}");
-            }
-        }
-    }
 }
 
 fn read_line() -> String {
