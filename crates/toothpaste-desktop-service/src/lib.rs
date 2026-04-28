@@ -4,5 +4,5 @@ pub mod modules;
 pub use modules::storage;
 pub use modules::crypto;
 pub use modules::ble::BleManager;
-pub use modules::ble::ResponseHandler;
+pub use modules::ble::interface::ResponseHandler;
 pub use modules::ble::interface::BLEInterface;

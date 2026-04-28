@@ -1,7 +1,7 @@
 use std::time::Duration;
 use tokio::time;
 use uuid::{uuid, Uuid};
-
+use toothpaste_desktop_core::{Device, DeviceState};
 use btleplug::api::{Central, Characteristic, Manager as _, Peripheral as _, ScanFilter};
 use btleplug::platform::{Adapter, Manager, Peripheral};
 
@@ -47,8 +47,8 @@ impl BleManager {
         })
     }
 
-    pub async fn ble_discover_toothpaste(&mut self) -> Result<Vec<String>, btleplug::Error> {
-        let mut discovered_devices: Vec<String> = Vec::new();
+    pub async fn ble_discover_toothpaste(&mut self) -> Result<Vec<Device>, btleplug::Error> {
+        let mut discovered_devices: Vec<Device> = Vec::new();
         self.adapter.start_scan(ScanFilter::default()).await.expect("Failed to start scan");
         time::sleep(Duration::from_secs(5)).await;
 
@@ -58,18 +58,24 @@ impl BleManager {
             if let Some(props) = properties {
                 if props.services.contains(&SERVICE_UUID) {
                     self.found_peripherals.push(peripheral.clone());
-                    discovered_devices.push(props.local_name.unwrap_or_default());
+                    discovered_devices.push(Device {
+                        name: props.local_name.unwrap_or_default(),
+                        address: props.address.to_string(),
+                        id: "".to_string(),
+                        signal_strength: props.rssi.unwrap_or(-100).into(),
+                        state: DeviceState::Disconnected,
+                    });
                 }
             }
         }
         Ok(discovered_devices)
     }
 
-    pub async fn ble_connect_toothpaste(&mut self, peripheral_name: &str) -> Result<String, Box<dyn std::error::Error>> {
+    pub async fn ble_connect_toothpaste(&mut self, device: Device) -> Result<String, Box<dyn std::error::Error>> {
         let mut peripheral = None;
         for p in self.found_peripherals.iter() {
             if let Ok(Some(props)) = p.properties().await {
-                if props.local_name == Some(peripheral_name.into()) {
+                if props.address == device.address.parse()? {
                     peripheral = Some(p.clone());
                     break;
                 }
@@ -81,7 +87,7 @@ impl BleManager {
             match peripheral.connect().await {
                 Ok(_) => self.connected_peripherial = Some(peripheral.clone()),
                 Err(err) => {
-                    eprintln!("Failed to connect to peripheral: {}, Error: {}", peripheral_name, err);
+                    eprintln!("Failed to connect to peripheral: {}, Error: {}", device.name, err);
                     return Err("Connection failed".into());
                 }
             };

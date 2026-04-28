@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use rdev::{Event, EventType, Key};
 use toothpaste_desktop_proto::packets::{self, create_unencrypted_packet};
 use toothpaste_desktop_proto::toothpaste::{data_packet, DataPacket, EncryptedData};
-use toothpaste_desktop_core::{Device, DeviceState, AuthState};
+use toothpaste_desktop_core::{AppState, AuthState, Device, DeviceState};
 
 use super::{BleManager};
 use crate::modules::crypto::EcdhContext;
@@ -31,10 +31,11 @@ pub trait ResponseHandler {
     async fn on_peer_known(&mut self, firmware_version: &str) -> Option<Vec<u8>>;
     async fn on_challenge(&mut self, challenge_data: &[u8], firmware_version: &str) -> Option<Vec<u8>>;
 }
+
 struct InternalHandler<'a, F> {
     ecdh: &'a Arc<Mutex<EcdhContext>>,
     device_id: &'a str,
-    device_observable: &'a Sender<Device>,
+    device_observable: &'a Sender<AppState>,
     on_peer_unknown: F,
 }
     
@@ -60,14 +61,16 @@ where
 
     // TODO: Add firmware check later
     async fn on_peer_known(&mut self, firmware_version: &str) -> Option<Vec<u8>> {
-        self.device_observable.send_modify(|d| d.state = DeviceState::Connected {
-            auth_state: AuthState::Authenticated{
-                pubkey: "N/A".to_string(),
-                session_key: "N/A".to_string(),
+        self.device_observable.send_modify(|d| d.connected_device = Some(Device {
+            state: DeviceState::Connected {
+                firmware_version: firmware_version.to_string(),
+                auth_state: AuthState::Authenticated {
+                    pubkey: "N/A".to_string(),
+                    session_key: "N/A".to_string(),
+                }
             },
-            signal_strength: -50,
-            firmware_version: firmware_version.to_string(),
-        });
+            ..d.connected_device.clone().unwrap()
+            }));
         println!("Device recognised (firmware: {firmware_version}). Awaiting challenge...");
         None
     }
@@ -80,14 +83,18 @@ where
             Err(e) => eprintln!("Failed to derive session key: {e}"),
         }
 
-        self.device_observable.send_modify(|d| d.state = DeviceState::Connected {
-            auth_state: AuthState::Authenticated{
-                pubkey: "N/A".to_string(),
-                session_key: "N/A".to_string(),
+        // Update device state to authenticated now that the handshake is complete.
+        // This will enable encrypted communication in the UI and update the displayed firmware version.
+        self.device_observable.send_modify(|d| d.connected_device = Some(Device {
+            state: DeviceState::Connected {
+                firmware_version: firmware_version.to_string(),
+                auth_state: AuthState::Authenticated {
+                    pubkey: "N/A".to_string(),
+                    session_key: "N/A".to_string(),
+                }
             },
-            signal_strength: -50,
-            firmware_version: firmware_version.to_string(),
-        });
+            ..d.connected_device.clone().unwrap()
+            }));
         None
     }
 }
@@ -105,34 +112,34 @@ pub struct BLEInterface {
     ble: BleManager,
     ecdh: Arc<Mutex<EcdhContext>>,
     device_id: Option<String>,
-    device_observable: Sender<Device>,
+    app_state_channel_tx: Sender<AppState>,
     command_rx: mpsc::Receiver<Event>,
 }
 
 impl BLEInterface {
-    pub async fn new(storage: StorageService, device_observable: Sender<Device>, command_rx: mpsc::Receiver<Event>) -> Result<Self, Box<dyn Error>> {
+    pub async fn new(storage: StorageService, app_state_channel_tx: Sender<AppState>, command_rx: mpsc::Receiver<Event>) -> Result<Self, Box<dyn Error>> {
         let ble = BleManager::new().await?;
         let ecdh = Arc::new(Mutex::new(EcdhContext::new(storage)));
         Ok(Self { 
             ble, 
             ecdh, 
             device_id: None, 
-            device_observable: device_observable, 
+            app_state_channel_tx, 
             command_rx: command_rx })
     }
 
     // ── Setup ────────────────────────────────────────────────────────────────
 
-    /// Scan for nearby ToothPaste devices and return their names.
+    /// Scan for nearby ToothPaste devices by SERVICE_UUID and return a list of `Device` for the TUI to display.
     /// Call this first to let the caller display and select a device before connecting.
-    pub async fn scan(&mut self) -> Result<Vec<String>, Box<dyn Error>> {
+    pub async fn scan(&mut self) -> Result<Vec<Device>, Box<dyn Error>> {
         self.ble.ble_discover_toothpaste().await.map_err(Into::into)
     }
 
     /// Connect to the named device and (if it is already paired) proactively send our
     /// stored public key so the device can issue an auth challenge immediately.
-    pub async fn connect_to_device(&mut self, name: &str) -> Result<(), Box<dyn Error>> {
-        let mac = self.ble.ble_connect_toothpaste(name).await?;
+    pub async fn connect_to_device(&mut self, device: Device) -> Result<(), Box<dyn Error>> {
+        let mac = self.ble.ble_connect_toothpaste(device).await?;
         self.device_id = Some(mac);
 
         if self.is_device_known().await {
@@ -155,15 +162,8 @@ impl BLEInterface {
         self.ble.ble_send_unencrypted(&BASE64.encode(&pub_key)).await
     }
 
-    // ── Notification loop (fully encapsulated) ────────────────────────────────
-
-    /// Run the main event loop: multiplex between BLE notifications and keyboard/mouse commands.
-    ///
-    /// `get_peer_key` is called only when the device signals it does not recognise us
-    /// (`PeerUnknown`). It should return the device's compressed P-256 public key (33 bytes),
-    /// or `None` to abort pairing. All other response types are handled automatically.
-    ///
-    /// This loops forever, processing both notification and command events concurrently.
+    // ── Main loop ─────────────────────────────────────────────────────────────
+    /// This loops forever, processing both notification and command events concurently.
     pub async fn run<F, Fut>(&mut self, get_peer_key: F) -> Result<(), Box<dyn Error>>
     where
         F: Fn() -> Fut,
@@ -173,7 +173,7 @@ impl BLEInterface {
         let mut handler = InternalHandler {
             ecdh: &self.ecdh,
             device_id: id,
-            device_observable: &self.device_observable,
+            device_observable: &self.app_state_channel_tx,
             on_peer_unknown: get_peer_key,
         };
 
