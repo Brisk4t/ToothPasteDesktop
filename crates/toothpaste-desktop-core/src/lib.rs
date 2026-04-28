@@ -1,5 +1,9 @@
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug)]
+/// Name used for the local socket (named pipe on Windows, Unix socket on Linux/macOS).
+pub const IPC_SOCKET_NAME: &str = "toothpaste-desktop";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AuthState {
     NotAuthenticated,
     AuthenticationFailed,
@@ -9,16 +13,16 @@ pub enum AuthState {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DeviceState {
-    Connected{
+    Connected {
         auth_state: AuthState,
         firmware_version: String,
     },
     Disconnected,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Device {
     pub name: String,
     pub address: String,
@@ -27,30 +31,45 @@ pub struct Device {
     pub signal_strength: i32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppState {
     pub app_version: String,
     pub app_string: String,
     pub devices: Vec<Device>,
-    pub auto_connect: Option<Device>, // Optional device to auto-connect to if found during scanning
-    pub connected_device: Option<Device>, // Currently connected device
-    pub password_protected: bool, // Whether the local storage is password protected
+    pub auto_connect: Option<Device>,
+    pub connected_device: Option<Device>,
+    pub password_protected: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AppCommand {
     ScanForDevices,
-    ConnectToDevice(Device), // Device ID or address
+    ConnectToDevice(Device),
     DisconnectDevice,
-    PairDevice{
+    PairDevice {
         device: Device,
         pub_key: String,
     },
     SendKeyboardInput(String),
-    SendMouseJiggle(bool), // Enable or disable mouse jiggle
+    SendMouseJiggle(bool),
     UpdateSettings {
         auto_connect: Option<Device>,
         password_protected: bool,
         settings_file_path: Option<String>,
     },
+}
+
+/// Wire protocol between the service and TUI.
+/// Each message is serialised as a single JSON line terminated by `\n`.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum IpcMessage {
+    /// Service → TUI: full AppState snapshot on every change.
+    State(AppState),
+    /// TUI → Service: a command to execute.
+    Command(AppCommand),
+    /// Service → TUI: device signalled it does not recognise us.
+    PairRequest,
+    /// TUI → Service: base64-encoded compressed P-256 public key (33 bytes).
+    PairResponse(String),
 }

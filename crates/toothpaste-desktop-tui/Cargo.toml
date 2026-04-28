@@ -9,8 +9,9 @@ path = "src/main.rs"
 
 [dependencies]
 toothpaste-desktop-core = { path = "../toothpaste-desktop-core" }
-toothpaste-desktop-service = { path = "../toothpaste-desktop-service" }
-toothpaste-desktop-proto = { path = "../toothpaste-desktop-proto" }
 ratatui = { version = "0.30.0" }
 crossterm = "0.29.0"
-tokio = { version = "1.52.1", features = ["rt-multi-thread"] }
+tokio = { version = "1.52.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+interprocess = { version = "2", features = ["tokio"] }
+serde_json = "1"
+base64 = "0.22"
