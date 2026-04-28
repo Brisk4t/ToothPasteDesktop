@@ -5,14 +5,16 @@ use rdev::{listen, Event, EventType, Key};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use notify_rust::Notification;
 use tokio::sync::mpsc;
+use tokio::time::{sleep, Duration};
 use toothpaste_desktop_service::storage::StorageService;
 use toothpaste_desktop_service::BLEInterface;
-use toothpaste_desktop_core::{Device, DeviceState, AppState, AuthState};
+use toothpaste_desktop_core::{Device, DeviceState, AppState, AuthState, AppCommand};
 
 
 
 #[tokio::main]
 async fn main() {
+    // ------- Channels ------------------------
 
     // Shared application state channel used by the BLE interface and the TUI. 
     // Updated by the BLE interface when devices are discovered/connected and by the TUI when the user selects a device to connect to or changes settings.
@@ -29,7 +31,8 @@ async fn main() {
 
     // Channel for input events from rdev listener
     // TODO: Since its shared by keyboard and mouse, might need a larger buffer or debounce / consume mouse events quicker
-    let (tx_fifo, command_rx) = mpsc::channel::<Event>(50);
+    let (input_event_tx, input_event_rx) = mpsc::channel::<Event>(50);
+    let (tui_tx, mut tui_rx) = mpsc::channel::<AppCommand>(10);
     
     // Initialize storage exiting on failure.
     let storage = match StorageService::new(PathBuf::from("toothpaste_storage.json"), None) {
@@ -38,7 +41,7 @@ async fn main() {
     };
 
     // Initialize BLE interface exiting on failure.
-    let mut ble = match BLEInterface::new(storage, app_state_tx.clone(), command_rx).await {
+    let mut ble = match BLEInterface::new(storage, app_state_tx.clone(), input_event_rx).await {
         Ok(b) => b,
         Err(e) => { eprintln!("BLE init failed: {e}"); return; }
     };
@@ -50,40 +53,40 @@ async fn main() {
         .show()
         .unwrap();
 
-    // Start BLE scanning and print discovered devices.
-    // Updates the shared app state with the list of discovered devices for the TUI to display.
-    match ble.scan().await {
-        Ok(devices) => { 
-            app_state_tx.send_modify(|app_state| {
-                app_state.devices = devices.clone();
-            });
-            for d in &devices { 
-            println!("Found: {}, address: {}, id: {}",d.name, d.address, d.id); 
-        }}
-        Err(e) => eprintln!("Scan error: {e}"),
-    }
 
-    // Attempt to connect to the device, exiting on failure.
-    // TODO: This should be triggered by the TUI when the user selects a device OR
-    // TODO: If a save state exists, this should be attempted for a saved device if it exists in the scan results.
-    let selected_device = app_state_rx.borrow().devices.get(0).cloned().unwrap(); // For testing, just select the first device found
-    match ble.connect_to_device(selected_device.clone()).await {
-        Ok(_) => {            
-            app_state_tx.send_modify(|app_state| {                
-                app_state.connected_device = Some(Device { 
-                    state: DeviceState::Connected {
-                        auth_state: AuthState::NotAuthenticated,
-                        firmware_version: "Unknown".to_string(),
-                    },
-                    ..selected_device.clone()
-                })
-            });
+    // ------- TUI Command Handler (with timeout fallback) ----------------
+
+    tokio::select! {
+        Some(command) = tui_rx.recv() => {
+            handle_tui_command(&mut ble, &app_state_rx, command).await;
         },
-        Err(e) => {
-            eprintln!("Connect failed: {e}");
-            return;
-        }
+        
+        _ = sleep(Duration::from_secs(2)) => {
+            // TUI not attached within 2 seconds, fallback triggered
+            println!("TUI not attached, fallback triggered");
+            match ble.scan().await {
+                Ok(devices) => { 
+                    app_state_tx.send_modify(|app_state| {
+                        app_state.devices = devices.clone();
+                    });
+                    for d in &devices { 
+                        println!("Found: {}, address: {}, id: {}",d.name, d.address, d.id); 
+                    }
+                }
+                Err(e) => eprintln!("Scan error: {e}"),
+            }
+
+            let selected_device = app_state_rx.borrow().devices.get(0).cloned().unwrap();
+            match ble.connect_to_device(selected_device.clone()).await {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("Connect failed: {e}");
+                    return;
+                }
+            }
+        },
     }
+    
 
     // Spawn the BLE event loop to handle notifications and commands
     // On PeerUnknown, it will prompt the user for input and send the response back to the device.
@@ -100,15 +103,39 @@ async fn main() {
         }
     });
 
+    // Spawn background task to listen for TUI commands continuously
+    tokio::spawn(async move {
+        while let Some(command) = tui_rx.recv().await {
+            println!("Received TUI command: {:?}", command);
+            // TODO: Process commands here or route to BLE interface via a separate channel
+        }
+    });
+
     // Spawn rdev listener thread to capture keyboard/mouse events
     // This blocks main perpetually
     listen(move |event| {
-        match tx_fifo.try_send(event) {
+        match input_event_tx.try_send(event) {
             Ok(_) => {},
             Err(e) => eprintln!("Failed to queue event: {e}"),
         };
     }).ok();
 
+}
+
+async fn handle_tui_command(ble: &mut BLEInterface, app_state_rx: &tokio::sync::watch::Receiver<AppState>, command: AppCommand) {
+    match command {
+        AppCommand::ScanForDevices => {
+            if let Err(e) = ble.scan().await {
+                eprintln!("Scan failed: {e}");
+            }
+        },
+        AppCommand::ConnectToDevice(device) => {
+            if let Err(e) = ble.connect_to_device(device).await {
+                eprintln!("Connect failed: {e}");
+            }
+        },
+        _ => println!("Received command: {:?}", command)
+    }
 }
 
 fn read_line() -> String {

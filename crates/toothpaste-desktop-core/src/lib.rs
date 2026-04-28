@@ -36,3 +36,21 @@ pub struct AppState {
     pub connected_device: Option<Device>, // Currently connected device
     pub password_protected: bool, // Whether the local storage is password protected
 }
+
+#[derive(Clone, Debug)]
+pub enum AppCommand {
+    ScanForDevices,
+    ConnectToDevice(Device), // Device ID or address
+    DisconnectDevice,
+    PairDevice{
+        device: Device,
+        pub_key: String,
+    },
+    SendKeyboardInput(String),
+    SendMouseJiggle(bool), // Enable or disable mouse jiggle
+    UpdateSettings {
+        auto_connect: Option<Device>,
+        password_protected: bool,
+        settings_file_path: Option<String>,
+    },
+}

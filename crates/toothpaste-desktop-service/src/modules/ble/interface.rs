@@ -99,7 +99,7 @@ where
     }
 }
 
-// ── BLEInterface ─────────────────────────────────────────────────────────────
+// --- BLEInterface -------------------------------
 
 /// High-level interface that owns the BLE transport and ECDH crypto context.
 ///
@@ -128,18 +128,26 @@ impl BLEInterface {
             command_rx: command_rx })
     }
 
-    // ── Setup ────────────────────────────────────────────────────────────────
+    // --- Setup ------------------------------------
 
-    /// Scan for nearby ToothPaste devices by SERVICE_UUID and return a list of `Device` for the TUI to display.
+    /// Scan for nearby ToothPaste devices by SERVICE_UUID and update app state with discovered devices for the TUI to display.
     /// Call this first to let the caller display and select a device before connecting.
     pub async fn scan(&mut self) -> Result<Vec<Device>, Box<dyn Error>> {
-        self.ble.ble_discover_toothpaste().await.map_err(Into::into)
+        match self.ble.ble_discover_toothpaste().await {
+            Ok(devices) => {
+                self.app_state_channel_tx.send_modify(|app_state| {
+                    app_state.devices = devices.clone();
+                });
+                Ok(devices)
+            },
+            Err(e) => Err(Box::new(e)),
+        }
     }
 
     /// Connect to the named device and (if it is already paired) proactively send our
     /// stored public key so the device can issue an auth challenge immediately.
     pub async fn connect_to_device(&mut self, device: Device) -> Result<(), Box<dyn Error>> {
-        let mac = self.ble.ble_connect_toothpaste(device).await?;
+        let mac = self.ble.ble_connect_toothpaste(device.clone()).await?;
         self.device_id = Some(mac);
 
         if self.is_device_known().await {
@@ -147,6 +155,17 @@ impl BLEInterface {
                 eprintln!("Failed to send public key: {e}");
             }
         }
+
+                    
+        self.app_state_channel_tx.send_modify(|app_state| {                
+            app_state.connected_device = Some(Device { 
+                state: DeviceState::Connected {
+                    auth_state: AuthState::NotAuthenticated,
+                    firmware_version: "Unknown".to_string(),
+                },
+                ..device.clone()
+            })
+        });
 
         Ok(())
     }
@@ -162,7 +181,7 @@ impl BLEInterface {
         self.ble.ble_send_unencrypted(&BASE64.encode(&pub_key)).await
     }
 
-    // ── Main loop ─────────────────────────────────────────────────────────────
+    // ------------- Main loop ----------------------
     /// This loops forever, processing both notification and command events concurently.
     pub async fn run<F, Fut>(&mut self, get_peer_key: F) -> Result<(), Box<dyn Error>>
     where
@@ -218,7 +237,7 @@ impl BLEInterface {
         }
     }
 
-    // ── Send helpers (raw data → proto → encrypt → BLE) ──────────────────────
+    // ------ Send helpers (raw data → proto → encrypt → BLE) -------------------
 
     pub async fn send_keyboard_string(&self, text: &str) -> Result<(), Box<dyn Error>> {
         self.encrypt_and_send(packets::create_keyboard_packet(text)).await
@@ -254,7 +273,7 @@ impl BLEInterface {
         self.encrypt_and_send(packets::create_mouse_jiggle_packet(enable)).await
     }
 
-    // ── Internal ─────────────────────────────────────────────────────────────
+    // ------ Internal ---------------------------------------
 
     /// Encode `payload` to bytes, encrypt with the session AES-GCM key, wrap in a
     /// `DataPacket`, and transmit over BLE.
