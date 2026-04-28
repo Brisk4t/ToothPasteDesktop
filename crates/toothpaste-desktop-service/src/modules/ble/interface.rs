@@ -5,8 +5,10 @@ use std::sync::Arc;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use prost::Message;
 use tokio::sync::Mutex;
+use tokio::sync::watch::Sender;
 use toothpaste_desktop_proto::packets::{self, create_unencrypted_packet};
 use toothpaste_desktop_proto::toothpaste::{data_packet, DataPacket, EncryptedData};
+use toothpaste_desktop_core::{Device, DeviceState, AuthState};
 
 use super::{BleManager, ResponseHandler};
 use crate::modules::crypto::EcdhContext;
@@ -21,9 +23,10 @@ use crate::modules::storage::StorageService;
 struct InternalHandler<'a, F> {
     ecdh: &'a Arc<Mutex<EcdhContext>>,
     device_id: &'a str,
+    device_observable: &'a Sender<Device>,
     on_peer_unknown: F,
 }
-
+    
 impl<'a, F, Fut> ResponseHandler for InternalHandler<'a, F>
 where
     F: Fn() -> Fut,
@@ -46,17 +49,34 @@ where
 
     // TODO: Add firmware check later
     async fn on_peer_known(&mut self, firmware_version: &str) -> Option<Vec<u8>> {
+        self.device_observable.send_modify(|d| d.state = DeviceState::Connected {
+            auth_state: AuthState::Authenticated{
+                pubkey: "N/A".to_string(),
+                session_key: "N/A".to_string(),
+            },
+            signal_strength: -50,
+            firmware_version: firmware_version.to_string(),
+        });
         println!("Device recognised (firmware: {firmware_version}). Awaiting challenge...");
         None
     }
 
     // Derive the session key from the device's challenge and our stored private key.
-    async fn on_challenge(&mut self, challenge_data: &[u8]) -> Option<Vec<u8>> {
+    async fn on_challenge(&mut self, challenge_data: &[u8], firmware_version: &str) -> Option<Vec<u8>> {        
         let mut ecdh = self.ecdh.lock().await;
         match ecdh.load_device_keys(self.device_id, challenge_data) {
             Ok(_) => println!("Session key derived. Authenticated."),
             Err(e) => eprintln!("Failed to derive session key: {e}"),
         }
+
+        self.device_observable.send_modify(|d| d.state = DeviceState::Connected {
+            auth_state: AuthState::Authenticated{
+                pubkey: "N/A".to_string(),
+                session_key: "N/A".to_string(),
+            },
+            signal_strength: -50,
+            firmware_version: firmware_version.to_string(),
+        });
         None
     }
 }
@@ -74,13 +94,14 @@ pub struct BLEInterface {
     ble: BleManager,
     ecdh: Arc<Mutex<EcdhContext>>,
     device_id: Option<String>,
+    device_observable: Sender<Device>,
 }
 
 impl BLEInterface {
-    pub async fn new(storage: StorageService) -> Result<Self, Box<dyn Error>> {
+    pub async fn new(storage: StorageService, device_observable: Sender<Device>) -> Result<Self, Box<dyn Error>> {
         let ble = BleManager::new().await?;
         let ecdh = Arc::new(Mutex::new(EcdhContext::new(storage)));
-        Ok(Self { ble, ecdh, device_id: None })
+        Ok(Self { ble, ecdh, device_id: None, device_observable: device_observable})
     }
 
     // ── Setup ────────────────────────────────────────────────────────────────
@@ -140,6 +161,7 @@ impl BLEInterface {
         let mut handler = InternalHandler {
             ecdh: &self.ecdh,
             device_id: id,
+            device_observable: &self.device_observable,
             on_peer_unknown: get_peer_key,
         };
         self.ble.subscribe_notifications(&mut handler).await

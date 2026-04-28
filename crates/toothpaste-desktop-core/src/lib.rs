@@ -16,10 +16,10 @@ pub enum DeviceState {
     Disconnected,
 }
 
-struct Device {
-    name: String,
-    address: String,
-    id: String,
-    state: DeviceState,
+pub struct Device {
+    pub name: String,
+    pub address: String,
+    pub id: String,
+    pub state: DeviceState,
 }
 

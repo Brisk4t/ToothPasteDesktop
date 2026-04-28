@@ -21,7 +21,7 @@ pub trait ResponseHandler {
     async fn on_keepalive(&mut self) -> Option<Vec<u8>>;
     async fn on_peer_unknown(&mut self) -> Option<Vec<u8>>;
     async fn on_peer_known(&mut self, firmware_version: &str) -> Option<Vec<u8>>;
-    async fn on_challenge(&mut self, challenge_data: &[u8]) -> Option<Vec<u8>>;
+    async fn on_challenge(&mut self, challenge_data: &[u8], firmware_version: &str) -> Option<Vec<u8>>;
 }
 struct CachedPeripheral {
     packet_char: Characteristic,
@@ -197,7 +197,7 @@ impl BleManager {
                 Ok(ResponseType::Keepalive)   => handler.on_keepalive().await,
                 Ok(ResponseType::PeerUnknown) => handler.on_peer_unknown().await,
                 Ok(ResponseType::PeerKnown)   => handler.on_peer_known(&packet.firmware_version).await,
-                Ok(ResponseType::Challenge)   => handler.on_challenge(&packet.challenge_data).await,
+                Ok(ResponseType::Challenge)   => handler.on_challenge(&packet.challenge_data, &packet.firmware_version).await,
                 Err(_) => { eprintln!("Unknown response type: {}", packet.response_type); None }
             };
 

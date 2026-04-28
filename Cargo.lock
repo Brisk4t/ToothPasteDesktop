@@ -2763,6 +2763,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "toothpaste-desktop-core",
  "toothpaste-desktop-proto",
  "uuid",
  "zeroize",
