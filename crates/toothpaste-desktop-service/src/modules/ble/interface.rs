@@ -13,7 +13,7 @@ use toothpaste_desktop_proto::packets::{self, create_unencrypted_packet};
 use toothpaste_desktop_proto::toothpaste::{data_packet, DataPacket, EncryptedData};
 use toothpaste_desktop_core::{Device, DeviceState, AuthState};
 
-use super::{BleManager, ResponseHandler};
+use super::{BleManager};
 use crate::modules::crypto::EcdhContext;
 use crate::modules::storage::StorageService;
 
@@ -23,6 +23,14 @@ use crate::modules::storage::StorageService;
 // `on_peer_unknown` is the only interactive step; it delegates to a closure
 // provided by main so the module stays free of UI concerns.
 
+/// Implement this trait to handle incoming `ResponsePacket` notifications from the device.
+/// Return `Some(bytes)` to write a packet back over BLE; `None` to send nothing.
+pub trait ResponseHandler {
+    async fn on_keepalive(&mut self) -> Option<Vec<u8>>;
+    async fn on_peer_unknown(&mut self) -> Option<Vec<u8>>;
+    async fn on_peer_known(&mut self, firmware_version: &str) -> Option<Vec<u8>>;
+    async fn on_challenge(&mut self, challenge_data: &[u8], firmware_version: &str) -> Option<Vec<u8>>;
+}
 struct InternalHandler<'a, F> {
     ecdh: &'a Arc<Mutex<EcdhContext>>,
     device_id: &'a str,

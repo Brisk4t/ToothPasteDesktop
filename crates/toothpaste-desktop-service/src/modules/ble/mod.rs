@@ -4,9 +4,6 @@ use uuid::{uuid, Uuid};
 
 use btleplug::api::{Central, Characteristic, Manager as _, Peripheral as _, ScanFilter};
 use btleplug::platform::{Adapter, Manager, Peripheral};
-use futures::{StreamExt, stream::BoxStream};
-use toothpaste_desktop_proto::toothpaste::response_packet::ResponseType;
-use toothpaste_desktop_proto::toothpaste::response_packet;
 
 pub mod interface;
 
@@ -15,14 +12,7 @@ const PACKET_CHARACTERISTIC_UUID: Uuid        = uuid!("6856e119-2c7b-455a-bf42-c
 const HID_SEMAPHORE_CHARACTERISTIC_UUID: Uuid = uuid!("6856e119-2c7b-455a-bf42-cf7ddd2c5908");
 const MAC_ADDRESS_CHARACTERISTIC_UUID: Uuid   = uuid!("19b10002-e8f2-537e-4f6c-d104768a1214");
 
-/// Implement this trait to handle incoming `ResponsePacket` notifications from the device.
-/// Return `Some(bytes)` to write a packet back over BLE; `None` to send nothing.
-pub trait ResponseHandler {
-    async fn on_keepalive(&mut self) -> Option<Vec<u8>>;
-    async fn on_peer_unknown(&mut self) -> Option<Vec<u8>>;
-    async fn on_peer_known(&mut self, firmware_version: &str) -> Option<Vec<u8>>;
-    async fn on_challenge(&mut self, challenge_data: &[u8], firmware_version: &str) -> Option<Vec<u8>>;
-}
+
 struct CachedPeripheral {
     packet_char: Characteristic,
     semaphore_char: Characteristic,

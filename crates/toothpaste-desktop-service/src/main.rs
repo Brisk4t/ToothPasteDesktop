@@ -23,7 +23,7 @@ async fn main() {
     });
 
     // Channel for input events from rdev listener
-    let (tx_Fifo, mut command_rx) = mpsc::channel::<Event>(50);
+    let (tx_fifo, mut command_rx) = mpsc::channel::<Event>(50);
     
     let storage = match StorageService::new(PathBuf::from("toothpaste_storage.json"), None) {
         Ok(s) => s,
@@ -75,7 +75,7 @@ async fn main() {
     // Spawn rdev listener thread to capture keyboard/mouse events
     std::thread::spawn(move || {
         listen(move |event| {
-            match tx_Fifo.try_send(event) {
+            match tx_fifo.try_send(event) {
                 Ok(_) => {},
                 Err(e) => eprintln!("Failed to queue event: {e}"),
             };
