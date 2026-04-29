@@ -55,6 +55,8 @@ fn render_outer_block(frame: &mut Frame, area: Rect) {
         " select  ".into(),
         "<S>".blue().bold(),
         " scan  ".into(),
+        "<X>".blue().bold(),
+        " KillService  ".into(),
         "<Q>".blue().bold(),
         " quit ".into(),
     ]);
@@ -95,7 +97,11 @@ fn render_home(frame: &mut Frame, app: &mut ToothPasteTUI, area: Rect) {
     ]));
     frame.render_widget(header, chunks[0]);
 
-    let items = vec![ListItem::new("  Scan for Devices"), ListItem::new("  Quit")];
+    let items = vec![
+        ListItem::new("  Scan for Devices"),
+        ListItem::new("  Shut down Service"),
+        ListItem::new("  Quit"),
+    ];
     let list = List::new(items)
         .highlight_style(
             Style::default()

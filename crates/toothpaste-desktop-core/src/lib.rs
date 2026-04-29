@@ -54,6 +54,7 @@ pub enum AppCommand {
         password_protected: bool,
         settings_file_path: Option<String>,
     },
+    KillService,
 }
 
 /// Wire protocol between the service and TUI.

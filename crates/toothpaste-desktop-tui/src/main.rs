@@ -15,12 +15,25 @@ use toothpaste_desktop_core::{AppCommand, AppState, IPC_SOCKET_NAME, IpcMessage}
 async fn main() -> io::Result<()> {
     let stream = connect_or_spawn().await?;
 
-    let (app_state_tx, app_state_rx) = watch::channel(AppState::default());
-
     let (cmd_tx, cmd_rx) = mpsc::channel::<AppCommand>(32);
     let (pair_req_tx, pair_req_rx) = mpsc::channel::<()>(1);
     let (pair_resp_tx, pair_resp_rx) = mpsc::channel::<[u8; 33]>(1);
 
+    let app_state_rx = spawn_ipc_bridge(stream, cmd_rx, pair_req_tx, pair_resp_rx);
+
+    tokio::task::block_in_place(|| tui::start_tui(app_state_rx, cmd_tx, pair_req_rx, pair_resp_tx))
+}
+
+// ── IPC bridge ────────────────────────────────────────────────────────────────
+//
+// Owns the watch::Sender internally. Returns only the Receiver so the rest of
+// the TUI never holds a write handle to the app state.
+
+fn spawn_ipc_bridge(
+    stream: Stream, cmd_rx: mpsc::Receiver<AppCommand>, pair_req_tx: mpsc::Sender<()>,
+    pair_resp_rx: mpsc::Receiver<[u8; 33]>,
+) -> watch::Receiver<AppState> {
+    let (app_state_tx, app_state_rx) = watch::channel(AppState::default());
     tokio::spawn(ipc_bridge(
         stream,
         app_state_tx,
@@ -28,11 +41,8 @@ async fn main() -> io::Result<()> {
         pair_req_tx,
         pair_resp_rx,
     ));
-
-    tokio::task::block_in_place(|| tui::start_tui(app_state_rx, cmd_tx, pair_req_rx, pair_resp_tx))
+    app_state_rx
 }
-
-// ── IPC bridge ────────────────────────────────────────────────────────────────
 
 async fn ipc_bridge(
     stream: Stream, app_state_tx: watch::Sender<AppState>, mut cmd_rx: mpsc::Receiver<AppCommand>,
@@ -55,7 +65,11 @@ async fn ipc_bridge(
             }
 
             Some(cmd) = cmd_rx.recv() => {
-                if write_msg(&mut send, &IpcMessage::Command(cmd)).await.is_err() { break; }
+                eprintln!("[IPC Bridge] Forwarding command to service: {:?}", cmd);
+                if write_msg(&mut send, &IpcMessage::Command(cmd)).await.is_err() { 
+                    eprintln!("[IPC Bridge] Failed to write command message");
+                    break; 
+                }
             }
 
             Some(arr) = pair_resp_rx.recv() => {
@@ -74,15 +88,12 @@ async fn write_msg<W: AsyncWriteExt + Unpin>(writer: &mut W, msg: &IpcMessage) -
 // ── Service discovery / spawn ─────────────────────────────────────────────────
 
 async fn connect_or_spawn() -> io::Result<Stream> {
-    // If the service is already running, connect to it
     if let Ok(s) = try_connect().await {
         return Ok(s);
     }
 
-    // Otherwise, spawn it
     spawn_service();
-    
-    // Wait for it to start up (with retries)
+
     for _ in 0..10 {
         tokio::time::sleep(Duration::from_millis(300)).await;
         if let Ok(s) = try_connect().await {
@@ -90,14 +101,12 @@ async fn connect_or_spawn() -> io::Result<Stream> {
         }
     }
 
-    // If we still can't connect, give up
     Err(io::Error::new(
         io::ErrorKind::ConnectionRefused,
         "Could not connect to toothpaste-desktop-service",
     ))
 }
 
-// Tries to connect to the service. Returns an error if it fails.
 async fn try_connect() -> io::Result<Stream> {
     let name = IPC_SOCKET_NAME
         .to_ns_name::<GenericNamespaced>()
@@ -105,7 +114,6 @@ async fn try_connect() -> io::Result<Stream> {
     Stream::connect(name).await
 }
 
-// Spawns the service as a child process. The service will keep running even after this process exits.
 fn spawn_service() {
     let mut path = std::env::current_exe()
         .ok()

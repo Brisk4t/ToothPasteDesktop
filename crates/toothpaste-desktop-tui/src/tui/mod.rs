@@ -140,6 +140,10 @@ impl ToothPasteTUI {
                     self.list_state.select(None);
                 }
             }
+            KeyCode::Char('x') | KeyCode::Char('X') => {
+                self.send_command(AppCommand::KillService);
+                self.status = "Shutting down service...".into();
+            }
             KeyCode::Char('d') | KeyCode::Char('D') => {
                 if matches!(self.current_screen, CurrentScreen::Connected) {
                     self.send_command(AppCommand::DisconnectDevice);
@@ -161,7 +165,11 @@ impl ToothPasteTUI {
                     self.status = "Scanning for devices...".into();
                     self.list_state.select(None);
                 }
-                Some(1) => self.exit = true,
+                Some(1) => {
+                    self.send_command(AppCommand::KillService);
+                    self.status = "Shutting down service...".into();
+                }
+                Some(2) => self.exit = true,
                 _ => {}
             },
             CurrentScreen::Scanning => {
@@ -220,7 +228,10 @@ impl ToothPasteTUI {
     }
 
     fn send_command(&self, cmd: AppCommand) {
-        let _ = self.cmd_tx.try_send(cmd);
+        match self.cmd_tx.try_send(cmd) {
+            Ok(_) => eprintln!("[TUI] Command sent successfully"),
+            Err(e) => eprintln!("[TUI] Failed to send command: {}", e),
+        }
     }
 }
 
