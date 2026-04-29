@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 
 /// Name used for the local socket (named pipe on Windows, Unix socket on Linux/macOS).
 pub const IPC_SOCKET_NAME: &str = "toothpaste-desktop";
+pub const APP_VERSION: &str = "0.1.0";
+pub const APP_STRING: &str = "Toothpaste Desktop";
+pub const SETTINGS_FILE_DEFAULT_PATH: &str = "F:\\VSCode\\ClipBoard\\ToothPasteDesktop\\crates\\toothpaste-desktop-service\\toothpaste_storage.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AuthState {
@@ -36,6 +39,7 @@ pub struct AppState {
     pub auto_connect: Option<Device>,
     pub connected_device: Option<Device>,
     pub password_protected: bool,
+    pub settings_file_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

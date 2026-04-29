@@ -12,8 +12,9 @@ use rdev::listen;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, mpsc, watch};
 use tokio::time::{sleep, Duration};
-use toothpaste_desktop_core::{AppCommand, AppState, IPC_SOCKET_NAME, IpcMessage};
+use toothpaste_desktop_core::{AppCommand, AppState, IPC_SOCKET_NAME, IpcMessage, SETTINGS_FILE_DEFAULT_PATH};
 use toothpaste_desktop_service::{BLEInterface, storage::StorageService};
+use std::fs;
 
 #[tokio::main]
 async fn main() {
@@ -26,6 +27,7 @@ async fn main() {
         auto_connect: None,
         connected_device: None,
         password_protected: false,
+        settings_file_path: Some(SETTINGS_FILE_DEFAULT_PATH.to_string()),
     });
 
     let (input_event_tx, input_event_rx) = mpsc::channel::<rdev::Event>(50);
@@ -44,7 +46,24 @@ async fn main() {
 
     // Initialize services ----------------------------------------------------------------------
     // Initialize storage
-    let storage = match StorageService::new(PathBuf::from("toothpaste_storage.json"), None) {
+    let settings_file_path = app_state_rx.borrow()
+        .settings_file_path
+        .clone()
+        .unwrap_or_else(|| SETTINGS_FILE_DEFAULT_PATH.to_string());
+    
+    let db_path = PathBuf::from(&settings_file_path);
+    
+    // Ensure parent directory exists
+    if let Some(parent) = db_path.parent() {
+        if !parent.exists() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                eprintln!("Failed to create settings directory: {e}");
+                return;
+            }
+        }
+    }
+
+    let storage = match StorageService::new(db_path, None) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Storage init failed: {e}");
@@ -53,7 +72,7 @@ async fn main() {
     };
 
     // Initialize BLE
-    let ble = match BLEInterface::new(storage, app_state_tx, input_event_rx).await {
+    let ble = match BLEInterface::new(storage, app_state_tx.clone(), input_event_rx).await {
         Ok(b) => b,
         Err(e) => {
             eprintln!("BLE init failed: {e}");
@@ -76,6 +95,7 @@ async fn main() {
         app_command_tx.clone(),
         pair_req_rx,
         pair_resp_tx,
+        app_state_tx,
         tui_connected_tx,
     ));
     tokio::spawn(auto_connect_task(
@@ -135,6 +155,17 @@ async fn ble_task(
                     eprintln!("Mouse jiggle error: {e}");
                 }
             }
+            AppCommand::UpdateSettings {
+                auto_connect: _,
+                password_protected: _,
+                settings_file_path,
+            } => {
+                // Note: Settings updates are handled in ipc_server for app state updates
+                // This task just logs them for now
+                if settings_file_path.is_some() {
+                    println!("Settings file path update requested (handle in ipc_server)");
+                }
+            }
             AppCommand::KillService => {
                 std::process::exit(0);
             }
@@ -148,6 +179,7 @@ async fn ble_task(
 async fn ipc_server(
     app_state_rx: watch::Receiver<AppState>, app_command_tx: mpsc::Sender<AppCommand>,
     pair_req_rx: Arc<Mutex<mpsc::Receiver<()>>>, pair_resp_tx: mpsc::Sender<[u8; 33]>,
+    app_state_tx: watch::Sender<AppState>,
     tui_connected_tx: watch::Sender<bool>,
 ) {
     let name = match IPC_SOCKET_NAME.to_ns_name::<GenericNamespaced>() {
@@ -177,7 +209,7 @@ async fn ipc_server(
                     app_command_tx.clone(),
                     pair_req_rx.clone(),
                     pair_resp_tx.clone(),
-                    tui_connected_tx.clone(),
+                    app_state_tx.clone(),
                 )
                 .await;
                 println!("TUI disconnected");
@@ -191,7 +223,7 @@ async fn ipc_server(
 async fn handle_connection(
     stream: Stream, mut app_state_rx: watch::Receiver<AppState>, app_command_tx: mpsc::Sender<AppCommand>,
     pair_req_rx: Arc<Mutex<mpsc::Receiver<()>>>, pair_resp_tx: mpsc::Sender<[u8; 33]>,
-    _tui_connected_tx: watch::Sender<bool>,
+    _app_state_tx: watch::Sender<AppState>,
 ) {
     let (recv, mut send) = stream.split();
     let mut lines = BufReader::new(recv).lines();
