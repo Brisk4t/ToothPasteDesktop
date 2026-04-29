@@ -56,11 +56,7 @@ async fn main() {
     tokio::spawn(ble_task(ble, cmd_rx, pair_req_tx, pair_resp_rx));
     tokio::spawn(ipc_server(app_state_rx, cmd_tx, pair_req_rx, pair_resp_tx));
 
-    tokio::task::spawn_blocking(move || {
-        listen(move |event| { let _ = input_event_tx.try_send(event); }).ok();
-    });
-
-    std::future::pending::<()>().await;
+    listen(move |event| { let _ = input_event_tx.try_send(event); }).ok();
 }
 
 // ── BLE task ──────────────────────────────────────────────────────────────────
