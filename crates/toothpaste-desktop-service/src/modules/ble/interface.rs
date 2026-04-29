@@ -1,6 +1,5 @@
-use futures::StreamExt;
+﻿use futures::StreamExt;
 use std::error::Error;
-use std::future::Future;
 use std::sync::Arc;
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
@@ -9,59 +8,43 @@ use rdev::{Event, EventType, Key};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::watch::Sender;
-use toothpaste_desktop_core::{AppState, AuthState, Device, DeviceState};
-use toothpaste_desktop_proto::packets::{self, create_unencrypted_packet};
+use toothpaste_desktop_core::{AppCommand, AppState, AuthState, Device, DeviceState};
+use toothpaste_desktop_proto::packets;
 use toothpaste_desktop_proto::toothpaste::{DataPacket, EncryptedData, data_packet};
 
 use super::BleManager;
 use crate::modules::crypto::EcdhContext;
 use crate::modules::storage::StorageService;
 
-// ── Internal ResponseHandler ──────────────────────────────────────────────────
-//
-// Drives the pairing / auth handshake without exposing ResponseHandler to callers.
-// `on_peer_unknown` is the only interactive step; it delegates to a closure
-// provided by main so the module stays free of UI concerns.
-
-/// Implement this trait to handle incoming `ResponsePacket` notifications from the device.
-/// Return `Some(bytes)` to write a packet back over BLE; `None` to send nothing.
-pub trait ResponseHandler {
-    async fn on_keepalive(&mut self) -> Option<Vec<u8>>;
-    async fn on_peer_unknown(&mut self) -> Option<Vec<u8>>;
-    async fn on_peer_known(&mut self, firmware_version: &str) -> Option<Vec<u8>>;
-    async fn on_challenge(
-        &mut self, challenge_data: &[u8], firmware_version: &str,
-    ) -> Option<Vec<u8>>;
-}
-
-struct InternalHandler<'a, F> {
+struct InternalHandler<'a> {
     ecdh: &'a Arc<Mutex<EcdhContext>>,
     device_id: &'a str,
     device_observable: &'a Sender<AppState>,
-    on_peer_unknown: F,
 }
 
-impl<'a, F, Fut> ResponseHandler for InternalHandler<'a, F>
-where
-    F: Fn() -> Fut,
-    Fut: Future<Output = Option<[u8; 33]>>,
-{
-    // Unimplemented
+impl<'a> InternalHandler<'a> {
     async fn on_keepalive(&mut self) -> Option<Vec<u8>> {
-        unimplemented!("Isn't required in the current implementation but ya never know")
+        None
     }
 
-    // TODO: Update to only signal an unpaired device instead of immediately entering pairing mode
+    // Set AuthenticationFailed so the TUI can show pairing UI and send AppCommand::PairDevice.
     async fn on_peer_unknown(&mut self) -> Option<Vec<u8>> {
-        let compressed = (self.on_peer_unknown)().await?;
-        let pub_key = self
-            .ecdh
-            .lock()
-            .await
-            .pair_new_device(&compressed, self.device_id)
-            .map_err(|e| eprintln!("Pairing failed: {e}"))
-            .ok()?;
-        Some(create_unencrypted_packet(&BASE64.encode(&pub_key)))
+        self.device_observable.send_modify(|d| {
+            if let Some(device) = d.connected_device.clone() {
+                let firmware_version = match &device.state {
+                    DeviceState::Connected { firmware_version, .. } => firmware_version.clone(),
+                    _ => "Unknown".to_string(),
+                };
+                d.connected_device = Some(Device {
+                    state: DeviceState::Connected {
+                        auth_state: AuthState::AuthenticationFailed,
+                        firmware_version,
+                    },
+                    ..device
+                });
+            }
+        });
+        None
     }
 
     async fn on_peer_known(&mut self, firmware_version: &str) -> Option<Vec<u8>> {
@@ -70,7 +53,9 @@ where
 
     // Derive the session key from the device's challenge and our stored private key.
     /// TODO: Implement firmware version check 
-    async fn on_challenge(&mut self, challenge_data: &[u8], firmware_version: &str) -> Option<Vec<u8>> {
+    async fn on_challenge(
+        &mut self, challenge_data: &[u8], firmware_version: &str,
+    ) -> Option<Vec<u8>> {
         let mut ecdh = self.ecdh.lock().await;
         match ecdh.load_device_keys(self.device_id, challenge_data) {
             Ok(_) => println!("Session key derived. Authenticated."),
@@ -180,22 +165,20 @@ impl BLEInterface {
     }
 
     // ------------- Main loop ----------------------
-    /// This loops forever, processing both notification and command events concurently.
-    pub async fn run<F, Fut>(&mut self, get_peer_key: F) -> Result<(), Box<dyn Error>>
-    where
-        F: Fn() -> Fut,
-        Fut: Future<Output = Option<[u8; 33]>>,
-    {
+
+    /// Loops forever, processing BLE notifications, raw input events, and TUI app commands concurrently.
+    pub async fn run(
+        &mut self, app_command_rx: &mut mpsc::Receiver<AppCommand>,
+    ) -> Result<(), String> {
         let id = self.device_id.as_deref().ok_or("no connected device")?;
         let mut handler = InternalHandler {
             ecdh: &self.ecdh,
             device_id: id,
             device_observable: &self.app_state_channel_tx,
-            on_peer_unknown: get_peer_key,
         };
 
-        // Subscribe to BLE notifications and get the stream of incoming packets.
-        let mut notification_stream = self.ble.subscribe_notifications().await?;
+        let mut notification_stream = self.ble.subscribe_notifications().await
+            .map_err(|e| e.to_string())?;
 
         loop {
             // Ownership is not concurrent, the thread that has an action available first will process it while the other awaits.
@@ -211,19 +194,15 @@ impl BLEInterface {
                         Err(e) => { eprintln!("Failed to decode ResponsePacket: {e}"); continue; }
                     };
 
-                    let response = match toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::try_from(packet.response_type) {
+                    let _response = match toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::try_from(packet.response_type) {
                         Ok(toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::Keepalive)   => handler.on_keepalive().await,
                         Ok(toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::PeerUnknown) => handler.on_peer_unknown().await,
                         Ok(toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::PeerKnown)   => handler.on_peer_known(&packet.firmware_version).await,
                         Ok(toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::Challenge)   => handler.on_challenge(&packet.challenge_data, &packet.firmware_version).await,
                         Err(_) => { eprintln!("Unknown response type: {}", packet.response_type); None }
                     };
-
-                    // Response handlers update state (pairing, auth) but don't write back
-                    let _ = response;
                 }
 
-                // Await the next keyboard/mouse event from the channel and send it to the device.
                 Some(event) = self.command_rx.recv() => {
                     if let Some(key) = event.name {
                         if let Err(e) = self.send_keyboard_string(key.as_str()).await {
@@ -232,7 +211,45 @@ impl BLEInterface {
                     }
                 }
 
-                // Add another channel for select to allow external commands from the TUI to be processed in this loop as well, e.g. disconnect command that breaks the loop and calls `ble_disconnect()`.
+                Some(cmd) = app_command_rx.recv() => {
+                    match cmd {
+                        AppCommand::PairDevice { pub_key, .. } => {
+                            let compressed: Option<[u8; 33]> = BASE64.decode(&pub_key)
+                                .ok()
+                                .and_then(|b| b.try_into().ok());
+                            if let Some(bytes) = compressed {
+                                // Convert Box<dyn Error> to String before any await so it
+                                // doesn't appear in the state machine at a yield point.
+                                let pair_result: Result<[u8; 65], String> = handler.ecdh
+                                    .lock().await
+                                    .pair_new_device(&bytes, handler.device_id)
+                                    .map_err(|e| e.to_string());
+                                match pair_result {
+                                    Ok(our_key) => {
+                                        if let Err(e) = self.ble.ble_send_unencrypted(&BASE64.encode(&our_key)).await {
+                                            eprintln!("Pairing BLE write failed: {e}");
+                                        }
+                                    }
+                                    Err(e) => eprintln!("Pairing failed: {e}"),
+                                }
+                            } else {
+                                eprintln!("PairDevice: pub_key must be a base64-encoded 33-byte compressed P-256 key");
+                            }
+                        }
+                        AppCommand::SendKeyboardInput(text) => {
+                            if let Err(e) = self.send_keyboard_string(&text).await {
+                                eprintln!("Keyboard send error: {e}");
+                            }
+                        }
+                        AppCommand::SendMouseJiggle(enable) => {
+                            if let Err(e) = self.send_mouse_jiggle(enable).await {
+                                eprintln!("Mouse jiggle error: {e}");
+                            }
+                        }
+                        AppCommand::KillService => std::process::exit(0),
+                        _ => {}
+                    }
+                }
             }
         }
     }

@@ -36,15 +36,10 @@ pub struct ToothPasteTUI {
 
     app_state_rx: watch::Receiver<AppState>,
     cmd_tx: mpsc::Sender<AppCommand>,
-    pair_req_rx: mpsc::Receiver<()>,
-    pair_resp_tx: mpsc::Sender<[u8; 33]>,
 }
 
 impl ToothPasteTUI {
-    fn new(
-        app_state_rx: watch::Receiver<AppState>, cmd_tx: mpsc::Sender<AppCommand>,
-        pair_req_rx: mpsc::Receiver<()>, pair_resp_tx: mpsc::Sender<[u8; 33]>,
-    ) -> Self {
+    fn new(app_state_rx: watch::Receiver<AppState>, cmd_tx: mpsc::Sender<AppCommand>) -> Self {
         let app_state = app_state_rx.borrow().clone();
         Self {
             current_screen: CurrentScreen::Home,
@@ -55,21 +50,12 @@ impl ToothPasteTUI {
             exit: false,
             app_state_rx,
             cmd_tx,
-            pair_req_rx,
-            pair_resp_tx,
         }
     }
 
     fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         while !self.exit {
             self.sync_app_state();
-
-            if let Ok(()) = self.pair_req_rx.try_recv() {
-                self.current_screen = CurrentScreen::PairingInput;
-                self.pair_input.clear();
-                self.status = "Device requires pairing. Enter peer public key (base64):".into();
-            }
-
             terminal.draw(|frame| ui(frame, self))?;
 
             if event::poll(Duration::from_millis(100))? {
@@ -105,6 +91,20 @@ impl ToothPasteTUI {
                 self.current_screen = CurrentScreen::Connected;
                 self.list_state.select(None);
                 self.status = String::new();
+            }
+
+            // Auto-transition: connected → pairing input when device signals it doesn't recognise us
+            if matches!(self.current_screen, CurrentScreen::Connected) {
+                if let Some(device) = &self.app_state.connected_device {
+                    if matches!(
+                        &device.state,
+                        DeviceState::Connected { auth_state: AuthState::AuthenticationFailed, .. }
+                    ) {
+                        self.current_screen = CurrentScreen::PairingInput;
+                        self.pair_input.clear();
+                        self.status = "Device requires pairing. Enter peer public key (base64):".into();
+                    }
+                }
             }
         }
     }
@@ -209,21 +209,18 @@ impl ToothPasteTUI {
     }
 
     fn submit_pair_input(&mut self) {
-        match BASE64.decode(self.pair_input.trim()) {
-            Ok(bytes) => match bytes.try_into() {
-                Ok(arr) => {
-                    let _ = self.pair_resp_tx.try_send(arr);
+        let trimmed = self.pair_input.trim().to_string();
+        match BASE64.decode(&trimmed) {
+            Ok(bytes) if bytes.len() == 33 => {
+                if let Some(device) = self.app_state.connected_device.clone() {
+                    self.send_command(AppCommand::PairDevice { device, pub_key: trimmed });
                     self.pair_input.clear();
                     self.current_screen = CurrentScreen::Connected;
                     self.status = "Pairing key sent.".into();
                 }
-                Err(_) => {
-                    self.status = "Invalid key: expected 33 bytes (compressed P-256).".into();
-                }
-            },
-            Err(_) => {
-                self.status = "Invalid base64. Try again.".into();
             }
+            Ok(_) => self.status = "Invalid key: expected 33 bytes (compressed P-256).".into(),
+            Err(_) => self.status = "Invalid base64. Try again.".into(),
         }
     }
 
@@ -240,7 +237,7 @@ pub fn auth_label(state: &AppState) -> &'static str {
             DeviceState::Connected { auth_state, .. } => match auth_state {
                 AuthState::Authenticated { .. } => "Authenticated",
                 AuthState::NotAuthenticated => "Authenticating…",
-                AuthState::AuthenticationFailed => "Auth failed",
+                AuthState::AuthenticationFailed => "Pairing required",
             },
             DeviceState::Disconnected => "Disconnected",
         },
@@ -264,7 +261,6 @@ pub fn firmware_label(state: &AppState) -> String {
 
 pub fn start_tui(
     app_state_rx: watch::Receiver<AppState>, cmd_tx: mpsc::Sender<AppCommand>,
-    pair_req_rx: mpsc::Receiver<()>, pair_resp_tx: mpsc::Sender<[u8; 33]>,
 ) -> io::Result<()> {
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
@@ -272,7 +268,7 @@ pub fn start_tui(
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    let mut app = ToothPasteTUI::new(app_state_rx, cmd_tx, pair_req_rx, pair_resp_tx);
+    let mut app = ToothPasteTUI::new(app_state_rx, cmd_tx);
     let result = app.run(&mut terminal);
 
     disable_raw_mode()?;

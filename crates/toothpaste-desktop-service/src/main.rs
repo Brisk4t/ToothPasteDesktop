@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use interprocess::local_socket::{
     GenericNamespaced, ListenerOptions, ToNsName,
@@ -10,7 +9,7 @@ use interprocess::local_socket::{
 use notify_rust::Notification;
 use rdev::listen;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep, Duration};
 use toothpaste_desktop_core::{AppCommand, AppState, IPC_SOCKET_NAME, IpcMessage, SETTINGS_FILE_DEFAULT_PATH};
 use toothpaste_desktop_service::{BLEInterface, storage::StorageService};
@@ -38,16 +37,8 @@ async fn main() {
     // Command channel for any commands sent from the TUI to the service (e.g. scan, connect, send input, etc.)
     let (app_command_tx, app_command_rx) = mpsc::channel::<AppCommand>(32);
 
-    // pair_req: BLE signals the IPC server that the device needs pairing.
-    let (pair_req_tx, pair_req_rx) = mpsc::channel::<()>(1);
-    // pair_resp: IPC server forwards the TUI's answer back to the BLE run loop.
-    let (pair_resp_tx, pair_resp_rx) = mpsc::channel::<[u8; 33]>(1);
-
     // tui_connected: Track whether the TUI client is connected
     let (tui_connected_tx, tui_connected_rx) = watch::channel(false);
-
-    let pair_req_rx = Arc::new(Mutex::new(pair_req_rx));
-    let pair_resp_rx = Arc::new(Mutex::new(pair_resp_rx));
 
     // Initialize services ----------------------------------------------------------------------
     // Get settings file path from app state (or use default) and initialize storage
@@ -95,12 +86,10 @@ async fn main() {
 
 
     // Spawn BLE and IPC tasks --------------------------------------------------------------------------------
-    tokio::spawn(ble_task(ble, app_command_rx, pair_req_tx, pair_resp_rx));
+    tokio::spawn(ble_task(ble, app_command_rx));
     tokio::spawn(ipc_server(
         app_state_rx.clone(),
         app_command_tx.clone(),
-        pair_req_rx,
-        pair_resp_tx,
         app_state_tx,
         tui_connected_tx,
     ));
@@ -119,10 +108,7 @@ async fn main() {
 
 // ── BLE task ──────────────────────────────────────────────────────────────────
 
-async fn ble_task(
-    mut ble: BLEInterface, mut app_command_rx: mpsc::Receiver<AppCommand>, pair_req_tx: mpsc::Sender<()>,
-    pair_resp_rx: Arc<Mutex<mpsc::Receiver<[u8; 33]>>>,
-) {
+async fn ble_task(mut ble: BLEInterface, mut app_command_rx: mpsc::Receiver<AppCommand>) {
     while let Some(cmd) = app_command_rx.recv().await {
         match cmd {
             AppCommand::ScanForDevices => {
@@ -135,19 +121,7 @@ async fn ble_task(
                     eprintln!("Connect error: {e}");
                     continue;
                 }
-                let req_tx = pair_req_tx.clone();
-                let resp_rx = pair_resp_rx.clone();
-                
-                if let Err(e) = ble.run(|| {
-                    let tx = req_tx.clone();
-                    let rx = resp_rx.clone();
-                    async move {
-                        tx.send(()).await.ok();
-                        rx.lock().await.recv().await
-                    }
-                })
-                .await
-                {
+                if let Err(e) = ble.run(&mut app_command_rx).await {
                     eprintln!("BLE run error: {e}");
                 }
             }
@@ -184,9 +158,7 @@ async fn ble_task(
 
 async fn ipc_server(
     app_state_rx: watch::Receiver<AppState>, app_command_tx: mpsc::Sender<AppCommand>,
-    pair_req_rx: Arc<Mutex<mpsc::Receiver<()>>>, pair_resp_tx: mpsc::Sender<[u8; 33]>,
-    app_state_tx: watch::Sender<AppState>,
-    tui_connected_tx: watch::Sender<bool>,
+    app_state_tx: watch::Sender<AppState>, tui_connected_tx: watch::Sender<bool>,
 ) {
     let name = match IPC_SOCKET_NAME.to_ns_name::<GenericNamespaced>() {
         Ok(n) => n,
@@ -213,8 +185,6 @@ async fn ipc_server(
                     stream,
                     app_state_rx.clone(),
                     app_command_tx.clone(),
-                    pair_req_rx.clone(),
-                    pair_resp_tx.clone(),
                     app_state_tx.clone(),
                 )
                 .await;
@@ -227,9 +197,8 @@ async fn ipc_server(
 }
 
 async fn handle_connection(
-    stream: Stream, mut app_state_rx: watch::Receiver<AppState>, app_command_tx: mpsc::Sender<AppCommand>,
-    pair_req_rx: Arc<Mutex<mpsc::Receiver<()>>>, pair_resp_tx: mpsc::Sender<[u8; 33]>,
-    _app_state_tx: watch::Sender<AppState>,
+    stream: Stream, mut app_state_rx: watch::Receiver<AppState>,
+    app_command_tx: mpsc::Sender<AppCommand>, _app_state_tx: watch::Sender<AppState>,
 ) {
     let (recv, mut send) = stream.split();
     let mut lines = BufReader::new(recv).lines();
@@ -245,22 +214,12 @@ async fn handle_connection(
                 if send_msg(&mut send, &IpcMessage::State(state)).await.is_err() { break; }
             }
 
-            pair = async { pair_req_rx.lock().await.recv().await } => {
-                if pair.is_none() { break; }
-                if send_msg(&mut send, &IpcMessage::PairRequest).await.is_err() { break; }
-            }
-
             line = lines.next_line() => {
                 match line {
                     Ok(Some(text)) => {
                         if let Ok(msg) = serde_json::from_str::<IpcMessage>(&text) {
                             match msg {
                                 IpcMessage::Command(cmd) => { app_command_tx.send(cmd).await.ok(); }
-                                IpcMessage::PairResponse(bytes) => {
-                                    if let Ok(arr) = bytes.try_into() {
-                                        pair_resp_tx.send(arr).await.ok();
-                                    }
-                                }
                                 _ => {}
                             }
                         }
