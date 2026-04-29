@@ -1,8 +1,8 @@
-use prost::Message;
 use crate::toothpaste::{
-    data_packet, encrypted_data, ConsumerControlPacket, DataPacket, EncryptedData, Frame,
-    KeyboardPacket, KeycodePacket, MouseJigglePacket, MousePacket, RenamePacket, ResponsePacket,
+    ConsumerControlPacket, DataPacket, EncryptedData, Frame, KeyboardPacket, KeycodePacket,
+    MouseJigglePacket, MousePacket, RenamePacket, ResponsePacket, data_packet, encrypted_data,
 };
+use prost::Message;
 
 // Create an unencrypted ToothPaste DataPacket from the input string
 pub fn create_unencrypted_packet(input: &str) -> Vec<u8> {
@@ -24,7 +24,10 @@ pub fn create_unencrypted_packet(input: &str) -> Vec<u8> {
 pub fn create_mouse_packet(x: f64, y: f64, left_click: bool, right_click: bool) -> EncryptedData {
     let mouse_packet = MousePacket {
         num_frames: 1,
-        frames: vec![Frame { x: x.round() as i32, y: y.round() as i32 }],
+        frames: vec![Frame {
+            x: x.round() as i32,
+            y: y.round() as i32,
+        }],
         l_click: left_click as i32,
         r_click: right_click as i32,
         wheel: 0,
@@ -36,14 +39,14 @@ pub fn create_mouse_packet(x: f64, y: f64, left_click: bool, right_click: bool) 
 }
 
 pub fn create_mouse_stream(
-    frames: &[(f64, f64)],
-    left_click: bool,
-    right_click: bool,
-    scroll_delta: i32,
+    frames: &[(f64, f64)], left_click: bool, right_click: bool, scroll_delta: i32,
 ) -> EncryptedData {
     let pb_frames: Vec<Frame> = frames
         .iter()
-        .map(|(x, y)| Frame { x: x.round() as i32, y: y.round() as i32 })
+        .map(|(x, y)| Frame {
+            x: x.round() as i32,
+            y: y.round() as i32,
+        })
         .collect();
     let mouse_packet = MousePacket {
         num_frames: pb_frames.len() as u32,
@@ -100,7 +103,10 @@ pub fn create_consumer_control_packet(code: u32) -> EncryptedData {
     EncryptedData {
         packet_type: encrypted_data::PacketType::ConsumerControl as i32,
         packet_data: Some(encrypted_data::PacketData::ConsumerControlPacket(
-            ConsumerControlPacket { code: vec![code], length: 1 },
+            ConsumerControlPacket {
+                code: vec![code],
+                length: 1,
+            },
         )),
     }
 }

@@ -4,15 +4,19 @@ use ui::ui;
 use std::io;
 use std::time::Duration;
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use ratatui::DefaultTerminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::widgets::ListState;
-use ratatui::DefaultTerminal;
 use tokio::sync::{mpsc, watch};
-use toothpaste_desktop_core::{AppCommand, AppState, DeviceState, AuthState};
+use toothpaste_desktop_core::{AppCommand, AppState, AuthState, DeviceState};
 
 pub enum CurrentScreen {
     Home,
@@ -38,10 +42,8 @@ pub struct ToothPasteTUI {
 
 impl ToothPasteTUI {
     fn new(
-        app_state_rx: watch::Receiver<AppState>,
-        cmd_tx: mpsc::Sender<AppCommand>,
-        pair_req_rx: mpsc::Receiver<()>,
-        pair_resp_tx: mpsc::Sender<[u8; 33]>,
+        app_state_rx: watch::Receiver<AppState>, cmd_tx: mpsc::Sender<AppCommand>,
+        pair_req_rx: mpsc::Receiver<()>, pair_resp_tx: mpsc::Sender<[u8; 33]>,
     ) -> Self {
         let app_state = app_state_rx.borrow().clone();
         Self {
@@ -95,8 +97,10 @@ impl ToothPasteTUI {
             }
 
             // Auto-transition: device list → connected when device connects
-            if matches!(self.current_screen, CurrentScreen::DeviceList | CurrentScreen::Scanning)
-                && self.app_state.connected_device.is_some()
+            if matches!(
+                self.current_screen,
+                CurrentScreen::DeviceList | CurrentScreen::Scanning
+            ) && self.app_state.connected_device.is_some()
             {
                 self.current_screen = CurrentScreen::Connected;
                 self.list_state.select(None);
@@ -239,7 +243,9 @@ pub fn auth_label(state: &AppState) -> &'static str {
 pub fn firmware_label(state: &AppState) -> String {
     match &state.connected_device {
         Some(d) => match &d.state {
-            DeviceState::Connected { firmware_version, .. } => firmware_version.clone(),
+            DeviceState::Connected {
+                firmware_version, ..
+            } => firmware_version.clone(),
             _ => "—".into(),
         },
         None => "—".into(),
@@ -249,10 +255,8 @@ pub fn firmware_label(state: &AppState) -> String {
 // ── entry point ───────────────────────────────────────────────────────────────
 
 pub fn start_tui(
-    app_state_rx: watch::Receiver<AppState>,
-    cmd_tx: mpsc::Sender<AppCommand>,
-    pair_req_rx: mpsc::Receiver<()>,
-    pair_resp_tx: mpsc::Sender<[u8; 33]>,
+    app_state_rx: watch::Receiver<AppState>, cmd_tx: mpsc::Sender<AppCommand>,
+    pair_req_rx: mpsc::Receiver<()>, pair_resp_tx: mpsc::Sender<[u8; 33]>,
 ) -> io::Result<()> {
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;

@@ -1,19 +1,19 @@
+use futures::StreamExt;
 use std::error::Error;
 use std::future::Future;
 use std::sync::Arc;
-use futures::StreamExt;
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use prost::Message;
-use tokio::sync::Mutex;
-use tokio::sync::watch::Sender;
-use tokio::sync::mpsc;
 use rdev::{Event, EventType, Key};
-use toothpaste_desktop_proto::packets::{self, create_unencrypted_packet};
-use toothpaste_desktop_proto::toothpaste::{data_packet, DataPacket, EncryptedData};
+use tokio::sync::Mutex;
+use tokio::sync::mpsc;
+use tokio::sync::watch::Sender;
 use toothpaste_desktop_core::{AppState, AuthState, Device, DeviceState};
+use toothpaste_desktop_proto::packets::{self, create_unencrypted_packet};
+use toothpaste_desktop_proto::toothpaste::{DataPacket, EncryptedData, data_packet};
 
-use super::{BleManager};
+use super::BleManager;
 use crate::modules::crypto::EcdhContext;
 use crate::modules::storage::StorageService;
 
@@ -29,7 +29,9 @@ pub trait ResponseHandler {
     async fn on_keepalive(&mut self) -> Option<Vec<u8>>;
     async fn on_peer_unknown(&mut self) -> Option<Vec<u8>>;
     async fn on_peer_known(&mut self, firmware_version: &str) -> Option<Vec<u8>>;
-    async fn on_challenge(&mut self, challenge_data: &[u8], firmware_version: &str) -> Option<Vec<u8>>;
+    async fn on_challenge(
+        &mut self, challenge_data: &[u8], firmware_version: &str,
+    ) -> Option<Vec<u8>>;
 }
 
 struct InternalHandler<'a, F> {
@@ -38,13 +40,13 @@ struct InternalHandler<'a, F> {
     device_observable: &'a Sender<AppState>,
     on_peer_unknown: F,
 }
-    
+
 impl<'a, F, Fut> ResponseHandler for InternalHandler<'a, F>
 where
     F: Fn() -> Fut,
     Fut: Future<Output = Option<[u8; 33]>>,
 {
-    // Unimplemented 
+    // Unimplemented
     async fn on_keepalive(&mut self) -> Option<Vec<u8>> {
         None
     }
@@ -52,7 +54,10 @@ where
     // TODO: Update to only signal an unpaired device instead of immediately entering pairing mode
     async fn on_peer_unknown(&mut self) -> Option<Vec<u8>> {
         let compressed = (self.on_peer_unknown)().await?;
-        let pub_key = self.ecdh.lock().await
+        let pub_key = self
+            .ecdh
+            .lock()
+            .await
             .pair_new_device(&compressed, self.device_id)
             .map_err(|e| eprintln!("Pairing failed: {e}"))
             .ok()?;
@@ -61,22 +66,26 @@ where
 
     // TODO: Add firmware check later
     async fn on_peer_known(&mut self, firmware_version: &str) -> Option<Vec<u8>> {
-        self.device_observable.send_modify(|d| d.connected_device = Some(Device {
-            state: DeviceState::Connected {
-                firmware_version: firmware_version.to_string(),
-                auth_state: AuthState::Authenticated {
-                    pubkey: "N/A".to_string(),
-                    session_key: "N/A".to_string(),
-                }
-            },
-            ..d.connected_device.clone().unwrap()
-            }));
+        self.device_observable.send_modify(|d| {
+            d.connected_device = Some(Device {
+                state: DeviceState::Connected {
+                    firmware_version: firmware_version.to_string(),
+                    auth_state: AuthState::Authenticated {
+                        pubkey: "N/A".to_string(),
+                        session_key: "N/A".to_string(),
+                    },
+                },
+                ..d.connected_device.clone().unwrap()
+            })
+        });
         println!("Device recognised (firmware: {firmware_version}). Awaiting challenge...");
         None
     }
 
     // Derive the session key from the device's challenge and our stored private key.
-    async fn on_challenge(&mut self, challenge_data: &[u8], firmware_version: &str) -> Option<Vec<u8>> {        
+    async fn on_challenge(
+        &mut self, challenge_data: &[u8], firmware_version: &str,
+    ) -> Option<Vec<u8>> {
         let mut ecdh = self.ecdh.lock().await;
         match ecdh.load_device_keys(self.device_id, challenge_data) {
             Ok(_) => println!("Session key derived. Authenticated."),
@@ -85,16 +94,18 @@ where
 
         // Update device state to authenticated now that the handshake is complete.
         // This will enable encrypted communication in the UI and update the displayed firmware version.
-        self.device_observable.send_modify(|d| d.connected_device = Some(Device {
-            state: DeviceState::Connected {
-                firmware_version: firmware_version.to_string(),
-                auth_state: AuthState::Authenticated {
-                    pubkey: "N/A".to_string(),
-                    session_key: "N/A".to_string(),
-                }
-            },
-            ..d.connected_device.clone().unwrap()
-            }));
+        self.device_observable.send_modify(|d| {
+            d.connected_device = Some(Device {
+                state: DeviceState::Connected {
+                    firmware_version: firmware_version.to_string(),
+                    auth_state: AuthState::Authenticated {
+                        pubkey: "N/A".to_string(),
+                        session_key: "N/A".to_string(),
+                    },
+                },
+                ..d.connected_device.clone().unwrap()
+            })
+        });
         None
     }
 }
@@ -117,15 +128,19 @@ pub struct BLEInterface {
 }
 
 impl BLEInterface {
-    pub async fn new(storage: StorageService, app_state_channel_tx: Sender<AppState>, command_rx: mpsc::Receiver<Event>) -> Result<Self, Box<dyn Error>> {
+    pub async fn new(
+        storage: StorageService, app_state_channel_tx: Sender<AppState>,
+        command_rx: mpsc::Receiver<Event>,
+    ) -> Result<Self, Box<dyn Error>> {
         let ble = BleManager::new().await?;
         let ecdh = Arc::new(Mutex::new(EcdhContext::new(storage)));
-        Ok(Self { 
-            ble, 
-            ecdh, 
-            device_id: None, 
-            app_state_channel_tx, 
-            command_rx: command_rx })
+        Ok(Self {
+            ble,
+            ecdh,
+            device_id: None,
+            app_state_channel_tx,
+            command_rx: command_rx,
+        })
     }
 
     // --- Setup ------------------------------------
@@ -139,7 +154,7 @@ impl BLEInterface {
                     app_state.devices = devices.clone();
                 });
                 Ok(devices)
-            },
+            }
             Err(e) => Err(Box::new(e)),
         }
     }
@@ -156,9 +171,8 @@ impl BLEInterface {
             }
         }
 
-                    
-        self.app_state_channel_tx.send_modify(|app_state| {                
-            app_state.connected_device = Some(Device { 
+        self.app_state_channel_tx.send_modify(|app_state| {
+            app_state.connected_device = Some(Device {
                 state: DeviceState::Connected {
                     auth_state: AuthState::NotAuthenticated,
                     firmware_version: "Unknown".to_string(),
@@ -171,14 +185,18 @@ impl BLEInterface {
     }
 
     async fn is_device_known(&self) -> bool {
-        let Some(id) = self.device_id.as_deref() else { return false; };
+        let Some(id) = self.device_id.as_deref() else {
+            return false;
+        };
         self.ecdh.lock().await.has_session(id)
     }
 
     async fn send_public_key(&self) -> Result<(), Box<dyn Error>> {
         let id = self.device_id.as_deref().ok_or("no connected device")?;
         let pub_key = self.ecdh.lock().await.get_stored_public_key(id)?;
-        self.ble.ble_send_unencrypted(&BASE64.encode(&pub_key)).await
+        self.ble
+            .ble_send_unencrypted(&BASE64.encode(&pub_key))
+            .await
     }
 
     // ------------- Main loop ----------------------
@@ -220,11 +238,11 @@ impl BLEInterface {
                         Ok(toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::Challenge)   => handler.on_challenge(&packet.challenge_data, &packet.firmware_version).await,
                         Err(_) => { eprintln!("Unknown response type: {}", packet.response_type); None }
                     };
-                    
+
                     // Response handlers update state (pairing, auth) but don't write back
                     let _ = response;
                 }
-                
+
                 // Await the next keyboard/mouse event from the channel and send it to the device.
                 Some(event) = self.command_rx.recv() => {
                     if let Some(key) = event.name {
@@ -240,37 +258,42 @@ impl BLEInterface {
     // ------ Send helpers (raw data → proto → encrypt → BLE) -------------------
 
     pub async fn send_keyboard_string(&self, text: &str) -> Result<(), Box<dyn Error>> {
-        self.encrypt_and_send(packets::create_keyboard_packet(text)).await
+        self.encrypt_and_send(packets::create_keyboard_packet(text))
+            .await
     }
 
     pub async fn send_keycode(&self, code: &[u8]) -> Result<(), Box<dyn Error>> {
-        self.encrypt_and_send(packets::create_keycode_packet(code)).await
+        self.encrypt_and_send(packets::create_keycode_packet(code))
+            .await
     }
 
-    pub async fn send_mouse(&self, x: f64, y: f64, left: bool, right: bool) -> Result<(), Box<dyn Error>> {
-        self.encrypt_and_send(packets::create_mouse_packet(x, y, left, right)).await
+    pub async fn send_mouse(
+        &self, x: f64, y: f64, left: bool, right: bool,
+    ) -> Result<(), Box<dyn Error>> {
+        self.encrypt_and_send(packets::create_mouse_packet(x, y, left, right))
+            .await
     }
 
     pub async fn send_mouse_stream(
-        &self,
-        frames: &[(f64, f64)],
-        left: bool,
-        right: bool,
-        scroll: i32,
+        &self, frames: &[(f64, f64)], left: bool, right: bool, scroll: i32,
     ) -> Result<(), Box<dyn Error>> {
-        self.encrypt_and_send(packets::create_mouse_stream(frames, left, right, scroll)).await
+        self.encrypt_and_send(packets::create_mouse_stream(frames, left, right, scroll))
+            .await
     }
 
     pub async fn send_rename(&self, name: &str) -> Result<(), Box<dyn Error>> {
-        self.encrypt_and_send(packets::create_rename_packet(name)).await
+        self.encrypt_and_send(packets::create_rename_packet(name))
+            .await
     }
 
     pub async fn send_consumer_control(&self, code: u32) -> Result<(), Box<dyn Error>> {
-        self.encrypt_and_send(packets::create_consumer_control_packet(code)).await
+        self.encrypt_and_send(packets::create_consumer_control_packet(code))
+            .await
     }
 
     pub async fn send_mouse_jiggle(&self, enable: bool) -> Result<(), Box<dyn Error>> {
-        self.encrypt_and_send(packets::create_mouse_jiggle_packet(enable)).await
+        self.encrypt_and_send(packets::create_mouse_jiggle_packet(enable))
+            .await
     }
 
     // ------ Internal ---------------------------------------
@@ -278,7 +301,6 @@ impl BLEInterface {
     /// Encode `payload` to bytes, encrypt with the session AES-GCM key, wrap in a
     /// `DataPacket`, and transmit over BLE.
     async fn encrypt_and_send(&self, payload: EncryptedData) -> Result<(), Box<dyn Error>> {
-        
         // Encode the protobuf message to bytes before encryption.
         let payload_bytes = payload.encode_to_vec();
 

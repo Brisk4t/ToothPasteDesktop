@@ -4,15 +4,13 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use interprocess::local_socket::{
-    tokio::Stream,
-    traits::tokio::Stream as _,
-    GenericNamespaced, ToNsName,
+    GenericNamespaced, ToNsName, tokio::Stream, traits::tokio::Stream as _,
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, watch};
-use toothpaste_desktop_core::{AppCommand, AppState, IpcMessage, IPC_SOCKET_NAME};
+use toothpaste_desktop_core::{AppCommand, AppState, IPC_SOCKET_NAME, IpcMessage};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -31,21 +29,22 @@ async fn main() -> io::Result<()> {
     let (pair_req_tx, pair_req_rx) = mpsc::channel::<()>(1);
     let (pair_resp_tx, pair_resp_rx) = mpsc::channel::<[u8; 33]>(1);
 
-    tokio::spawn(ipc_bridge(stream, app_state_tx, cmd_rx, pair_req_tx, pair_resp_rx));
+    tokio::spawn(ipc_bridge(
+        stream,
+        app_state_tx,
+        cmd_rx,
+        pair_req_tx,
+        pair_resp_rx,
+    ));
 
-    tokio::task::block_in_place(|| {
-        tui::start_tui(app_state_rx, cmd_tx, pair_req_rx, pair_resp_tx)
-    })
+    tokio::task::block_in_place(|| tui::start_tui(app_state_rx, cmd_tx, pair_req_rx, pair_resp_tx))
 }
 
 // ── IPC bridge ────────────────────────────────────────────────────────────────
 
 async fn ipc_bridge(
-    stream: Stream,
-    app_state_tx: watch::Sender<AppState>,
-    mut cmd_rx: mpsc::Receiver<AppCommand>,
-    pair_req_tx: mpsc::Sender<()>,
-    mut pair_resp_rx: mpsc::Receiver<[u8; 33]>,
+    stream: Stream, app_state_tx: watch::Sender<AppState>, mut cmd_rx: mpsc::Receiver<AppCommand>,
+    pair_req_tx: mpsc::Sender<()>, mut pair_resp_rx: mpsc::Receiver<[u8; 33]>,
 ) {
     let (recv, mut send) = stream.split();
     let mut lines = BufReader::new(recv).lines();

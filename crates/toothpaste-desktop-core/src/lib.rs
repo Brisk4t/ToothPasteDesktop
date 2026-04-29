@@ -7,10 +7,7 @@ pub const IPC_SOCKET_NAME: &str = "toothpaste-desktop";
 pub enum AuthState {
     NotAuthenticated,
     AuthenticationFailed,
-    Authenticated {
-        pubkey: String,
-        session_key: String,
-    },
+    Authenticated { pubkey: String, session_key: String },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

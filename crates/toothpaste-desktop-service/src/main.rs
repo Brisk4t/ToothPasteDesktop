@@ -1,22 +1,24 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use interprocess::local_socket::{
+    GenericNamespaced, ListenerOptions, ToNsName,
     tokio::{Listener, Stream},
     traits::tokio::Listener as _,
     traits::tokio::Stream as _,
-    GenericNamespaced, ListenerOptions, ToNsName,
 };
 use notify_rust::Notification;
 use rdev::listen;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{mpsc, watch, Mutex};
-use toothpaste_desktop_core::{AppCommand, AppState, IpcMessage, IPC_SOCKET_NAME};
-use toothpaste_desktop_service::{storage::StorageService, BLEInterface};
+use tokio::sync::{Mutex, mpsc, watch};
+use toothpaste_desktop_core::{AppCommand, AppState, IPC_SOCKET_NAME, IpcMessage};
+use toothpaste_desktop_service::{BLEInterface, storage::StorageService};
 
 #[tokio::main]
 async fn main() {
+
+    // Channels --------------------------------------------------------------------------------
     let (app_state_tx, app_state_rx) = watch::channel(AppState {
         app_version: "0.1.0".to_string(),
         app_string: "ToothPaste Desktop Service".to_string(),
@@ -39,12 +41,18 @@ async fn main() {
 
     let storage = match StorageService::new(PathBuf::from("toothpaste_storage.json"), None) {
         Ok(s) => s,
-        Err(e) => { eprintln!("Storage init failed: {e}"); return; }
+        Err(e) => {
+            eprintln!("Storage init failed: {e}");
+            return;
+        }
     };
 
     let ble = match BLEInterface::new(storage, app_state_tx, input_event_rx).await {
         Ok(b) => b,
-        Err(e) => { eprintln!("BLE init failed: {e}"); return; }
+        Err(e) => {
+            eprintln!("BLE init failed: {e}");
+            return;
+        }
     };
 
     Notification::new()
@@ -56,15 +64,16 @@ async fn main() {
     tokio::spawn(ble_task(ble, cmd_rx, pair_req_tx, pair_resp_rx));
     tokio::spawn(ipc_server(app_state_rx, cmd_tx, pair_req_rx, pair_resp_tx));
 
-    listen(move |event| { let _ = input_event_tx.try_send(event); }).ok();
+    listen(move |event| {
+        let _ = input_event_tx.try_send(event);
+    })
+    .ok();
 }
 
 // ── BLE task ──────────────────────────────────────────────────────────────────
 
 async fn ble_task(
-    mut ble: BLEInterface,
-    mut cmd_rx: mpsc::Receiver<AppCommand>,
-    pair_req_tx: mpsc::Sender<()>,
+    mut ble: BLEInterface, mut cmd_rx: mpsc::Receiver<AppCommand>, pair_req_tx: mpsc::Sender<()>,
     pair_resp_rx: Arc<Mutex<mpsc::Receiver<[u8; 33]>>>,
 ) {
     while let Some(cmd) = cmd_rx.recv().await {
@@ -114,18 +123,22 @@ async fn ble_task(
 // ── IPC server ────────────────────────────────────────────────────────────────
 
 async fn ipc_server(
-    app_state_rx: watch::Receiver<AppState>,
-    cmd_tx: mpsc::Sender<AppCommand>,
-    pair_req_rx: Arc<Mutex<mpsc::Receiver<()>>>,
-    pair_resp_tx: mpsc::Sender<[u8; 33]>,
+    app_state_rx: watch::Receiver<AppState>, cmd_tx: mpsc::Sender<AppCommand>,
+    pair_req_rx: Arc<Mutex<mpsc::Receiver<()>>>, pair_resp_tx: mpsc::Sender<[u8; 33]>,
 ) {
     let name = match IPC_SOCKET_NAME.to_ns_name::<GenericNamespaced>() {
         Ok(n) => n,
-        Err(e) => { eprintln!("IPC name error: {e}"); return; }
+        Err(e) => {
+            eprintln!("IPC name error: {e}");
+            return;
+        }
     };
     let listener: Listener = match ListenerOptions::new().name(name).create_tokio() {
         Ok(l) => l,
-        Err(e) => { eprintln!("IPC listen failed: {e}"); return; }
+        Err(e) => {
+            eprintln!("IPC listen failed: {e}");
+            return;
+        }
     };
     println!("IPC server listening on socket '{IPC_SOCKET_NAME}'");
 
@@ -149,11 +162,8 @@ async fn ipc_server(
 }
 
 async fn handle_connection(
-    stream: Stream,
-    mut app_state_rx: watch::Receiver<AppState>,
-    cmd_tx: mpsc::Sender<AppCommand>,
-    pair_req_rx: Arc<Mutex<mpsc::Receiver<()>>>,
-    pair_resp_tx: mpsc::Sender<[u8; 33]>,
+    stream: Stream, mut app_state_rx: watch::Receiver<AppState>, cmd_tx: mpsc::Sender<AppCommand>,
+    pair_req_rx: Arc<Mutex<mpsc::Receiver<()>>>, pair_resp_tx: mpsc::Sender<[u8; 33]>,
 ) {
     let (recv, mut send) = stream.split();
     let mut lines = BufReader::new(recv).lines();

@@ -1,20 +1,19 @@
 use super::storage::StorageService;
 
 use aes_gcm::{
-    aead::{Aead, AeadCore, OsRng},
     Aes256Gcm, Key, KeyInit, Nonce,
+    aead::{Aead, AeadCore, OsRng},
 };
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use hkdf::Hkdf;
-use p256::SecretKey;
 use p256::PublicKey;
+use p256::SecretKey;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
-use sha2::Sha256;
+use rand::thread_rng;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use std::error::Error;
 use std::fmt;
-use rand::thread_rng;
-
 
 #[derive(Debug)]
 pub struct DeviceNotFoundError(pub String);
@@ -46,8 +45,11 @@ pub struct EcdhSession {
 }
 
 mod secret_key_serde {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-    use p256::{pkcs8::{DecodePrivateKey, EncodePrivateKey}, SecretKey};
+    use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+    use p256::{
+        SecretKey,
+        pkcs8::{DecodePrivateKey, EncodePrivateKey},
+    };
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn serialize<S: Serializer>(key: &SecretKey, s: S) -> Result<S::Ok, S::Error> {
@@ -63,7 +65,7 @@ mod secret_key_serde {
 }
 
 mod bytes65_serde {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn serialize<S: Serializer>(bytes: &[u8; 65], s: S) -> Result<S::Ok, S::Error> {
@@ -73,7 +75,9 @@ mod bytes65_serde {
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 65], D::Error> {
         let encoded = String::deserialize(d)?;
         let bytes = BASE64.decode(&encoded).map_err(serde::de::Error::custom)?;
-        bytes.try_into().map_err(|_| serde::de::Error::custom("expected 65 bytes"))
+        bytes
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("expected 65 bytes"))
     }
 }
 
@@ -99,9 +103,12 @@ impl EcdhContext {
 
     /// Generate and persist a new ECDH key pair for a device pairing.
     /// Call once during initial device pairing — keys persist in keyring.
-    pub fn generate_device_keys(&mut self, device_id: &str, peer_public_key: &[u8; 65]) -> Result<[u8; 65], Box<dyn Error>> {
+    pub fn generate_device_keys(
+        &mut self, device_id: &str, peer_public_key: &[u8; 65],
+    ) -> Result<[u8; 65], Box<dyn Error>> {
         let private_key = SecretKey::random(&mut thread_rng());
-        let pub_key_bytes: [u8; 65] = private_key.public_key()
+        let pub_key_bytes: [u8; 65] = private_key
+            .public_key()
             .to_encoded_point(false)
             .as_bytes()
             .try_into()?;
@@ -123,7 +130,9 @@ impl EcdhContext {
     /// Call after initial pairing to restore the device session.
     ///
     /// `challenge_data` is used as HKDF salt; pass `&[]` to use no salt.
-    pub fn load_device_keys(&mut self, device_id: &str, challenge_data: &[u8]) -> Result<[u8; 65], Box<dyn Error>> {
+    pub fn load_device_keys(
+        &mut self, device_id: &str, challenge_data: &[u8],
+    ) -> Result<[u8; 65], Box<dyn Error>> {
         let storage_key = format!("session_{}", device_id);
         if !self.storage.contains(&storage_key) {
             return Err(Box::new(DeviceNotFoundError(device_id.to_string())));
@@ -135,7 +144,11 @@ impl EcdhContext {
         let session: EcdhSession = serde_json::from_slice(&bytes)?;
         let pub_key_bytes = session.self_public_key;
         self.active_session = Some(session);
-        let salt = if challenge_data.is_empty() { None } else { Some(challenge_data) };
+        let salt = if challenge_data.is_empty() {
+            None
+        } else {
+            Some(challenge_data)
+        };
         self.derive_aes_key(salt)?;
         self.print_aes_key_debug();
         Ok(pub_key_bytes)
@@ -197,7 +210,10 @@ impl EcdhContext {
         );
         let shared_secret: [u8; 32] = shared.raw_secret_bytes().as_slice().try_into()?;
 
-        let shared_secret_hex = shared_secret.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+        let shared_secret_hex = shared_secret
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
         let shared_secret_base64 = BASE64.encode(&shared_secret);
         println!("Shared Secret Generated:");
         println!("  Hex: {}", shared_secret_hex);
@@ -234,7 +250,9 @@ impl EcdhContext {
     /// Encrypt `data` with the session AES-GCM key.
     /// Returns `nonce(12) || ciphertext || tag(16)`.
     pub fn encrypt_bytes(&self, unencrypted_data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        let aes_key = self.active_session.as_ref()
+        let aes_key = self
+            .active_session
+            .as_ref()
             .and_then(|s| s.aes_key.as_ref())
             .ok_or("no active AES session key")?;
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
@@ -248,7 +266,9 @@ impl EcdhContext {
 
     /// Decrypt `nonce(12) || ciphertext || tag(16)` with the session AES-GCM key.
     pub fn decrypt_bytes(&self, ciphertext_bytes: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        let aes_key = self.active_session.as_ref()
+        let aes_key = self
+            .active_session
+            .as_ref()
             .and_then(|s| s.aes_key.as_ref())
             .ok_or("no active AES session key")?;
         const NONCE_LEN: usize = 12;
@@ -267,8 +287,9 @@ impl EcdhContext {
 
     /// Complete pairing flow: decompress peer key, generate our key pair, save session.
     /// Returns our uncompressed public key (65 bytes) to send back to the peer.
-    pub fn pair_new_device(&mut self, peer_key: &[u8; 33], device_id: &str)
-        -> Result<[u8; 65], Box<dyn Error>> {
+    pub fn pair_new_device(
+        &mut self, peer_key: &[u8; 33], device_id: &str,
+    ) -> Result<[u8; 65], Box<dyn Error>> {
         let decompressed_key = EcdhContext::decompress_key(peer_key)?;
         let self_public_key = self.generate_device_keys(device_id, &decompressed_key)?;
         self.save_session()?;
@@ -288,8 +309,12 @@ impl EcdhContext {
     }
 
     fn print_base64_data(label: &str, data: &[u8]) {
-        let hex_string = data.iter().map(|b| format!("{:02x}", b)).collect::<String>();
-        let ascii_repr = data.iter()
+        let hex_string = data
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
+        let ascii_repr = data
+            .iter()
             .map(|&b| if b >= 32 && b < 127 { b as char } else { '.' })
             .collect::<String>();
         println!("{}: {} bytes", label, data.len());
@@ -299,18 +324,21 @@ impl EcdhContext {
 
     pub fn print_aes_key_debug(&self) {
         match self.active_session.as_ref() {
-            Some(session) => {
-                match &session.debug_aes_key_base64 {
-                    Some(key_base64) => {
-                        println!("AES-256-GCM Key (Base64): {}", key_base64);
-                        println!("AES Key (hex): {}",
-                            BASE64.decode(key_base64)
-                                .map(|bytes| bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>())
-                                .unwrap_or_else(|_| "ERROR".to_string())
-                        );
-                    },
-                    None => eprintln!("AES key not derived yet or derive_aes_key not called"),
+            Some(session) => match &session.debug_aes_key_base64 {
+                Some(key_base64) => {
+                    println!("AES-256-GCM Key (Base64): {}", key_base64);
+                    println!(
+                        "AES Key (hex): {}",
+                        BASE64
+                            .decode(key_base64)
+                            .map(|bytes| bytes
+                                .iter()
+                                .map(|b| format!("{:02x}", b))
+                                .collect::<String>())
+                            .unwrap_or_else(|_| "ERROR".to_string())
+                    );
                 }
+                None => eprintln!("AES key not derived yet or derive_aes_key not called"),
             },
             None => eprintln!("No active session"),
         }
@@ -319,7 +347,7 @@ impl EcdhContext {
 
 #[cfg(test)]
 mod tests {
-    
+
     #[test]
     fn test_key_compression_decompression() {
         todo!("Test compression/decompression roundtrip")

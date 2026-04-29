@@ -1,8 +1,8 @@
 use aes_gcm::{
-    aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm, Key, Nonce,
+    aead::{Aead, AeadCore, KeyInit, OsRng},
 };
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use hkdf::Hkdf;
 use keyring::Entry;
 use rand::RngCore;
@@ -36,7 +36,9 @@ impl StorageService {
     /// If `password` is `Some`, the cipher key is derived from both the master key
     /// and the password using HKDF-SHA256; the same password must be supplied on
     /// every subsequent open or decryption will fail.
-    pub fn new(db_path: PathBuf, password: Option<&str>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(
+        db_path: PathBuf, password: Option<&str>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let entry = Entry::new(MASTER_KEY_SERVICE, MASTER_KEY_USER)?;
 
         let master_key: Zeroizing<[u8; 32]> = match entry.get_secret() {
@@ -70,7 +72,11 @@ impl StorageService {
             HashMap::new()
         };
 
-        Ok(Self { cipher, db_path, db })
+        Ok(Self {
+            cipher,
+            db_path,
+            db,
+        })
     }
 
     pub fn get(&self, key: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
