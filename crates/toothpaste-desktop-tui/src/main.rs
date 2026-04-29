@@ -103,5 +103,9 @@ fn spawn_service() {
     #[cfg(windows)]
     path.set_extension("exe");
 
-    std::process::Command::new(&path).spawn().ok();
+    std::process::Command::new(&path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok();
 }

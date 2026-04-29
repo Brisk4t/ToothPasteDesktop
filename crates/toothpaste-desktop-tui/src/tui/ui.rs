@@ -164,7 +164,7 @@ fn render_device_list(frame: &mut Frame, app: &mut ToothPasteTUI, area: Rect) {
     frame.render_stateful_widget(list, chunks[1], &mut app.list_state);
 }
 
-fn render_connected(frame: &mut Frame, app: &ToothPasteTUI, area: Rect) {
+fn render_connected(frame: &mut Frame, app: &mut ToothPasteTUI, area: Rect) {
     let dev = match &app.app_state.connected_device {
         Some(d) => d,
         None => return,
@@ -175,20 +175,23 @@ fn render_connected(frame: &mut Frame, app: &ToothPasteTUI, area: Rect) {
 
     let auth_color = if auth == "Authenticated" {
         Color::Green
-    } else if auth == "Auth failed" {
+    } else if auth == "Pairing required" {
         Color::Red
     } else {
         Color::Yellow
     };
 
-    let text = Text::from(vec![
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(6), Constraint::Min(0)])
+        .split(area);
+
+    let info = Text::from(vec![
         Line::from(vec![
             Span::styled("Connected  ", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
                 &dev.name,
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(""),
@@ -204,14 +207,17 @@ fn render_connected(frame: &mut Frame, app: &ToothPasteTUI, area: Rect) {
             Span::raw("  Auth:      "),
             Span::styled(auth, Style::default().fg(auth_color)),
         ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  <D> Disconnect",
-            Style::default().fg(Color::DarkGray),
-        )),
     ]);
+    frame.render_widget(Paragraph::new(info).wrap(Wrap { trim: false }), chunks[0]);
 
-    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), area);
+    let items = vec![
+        ListItem::new("  Pair Device"),
+        ListItem::new("  Disconnect"),
+    ];
+    let list = List::new(items)
+        .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .highlight_symbol("> ");
+    frame.render_stateful_widget(list, chunks[1], &mut app.list_state);
 }
 
 fn render_pairing(frame: &mut Frame, app: &ToothPasteTUI, area: Rect) {
@@ -286,7 +292,7 @@ fn render_side_panel(frame: &mut Frame, app: &ToothPasteTUI, area: Rect) {
             let fw = firmware_label(state);
             let auth_color = if auth == "Authenticated" {
                 Color::Green
-            } else if auth == "Auth failed" {
+            } else if auth == "Pairing required" {
                 Color::Red
             } else {
                 Color::Yellow

@@ -89,7 +89,7 @@ impl ToothPasteTUI {
             ) && self.app_state.connected_device.is_some()
             {
                 self.current_screen = CurrentScreen::Connected;
-                self.list_state.select(None);
+                self.list_state.select(Some(0));
                 self.status = String::new();
             }
 
@@ -188,7 +188,19 @@ impl ToothPasteTUI {
                 }
             }
             CurrentScreen::PairingInput => self.submit_pair_input(),
-            CurrentScreen::Connected => {}
+            CurrentScreen::Connected => match self.list_state.selected() {
+                Some(0) => {
+                    self.current_screen = CurrentScreen::PairingInput;
+                    self.pair_input.clear();
+                    self.status = "Enter peer public key (base64):".into();
+                }
+                Some(1) => {
+                    self.send_command(AppCommand::DisconnectDevice);
+                    self.current_screen = CurrentScreen::Home;
+                    self.status = String::new();
+                }
+                _ => {}
+            },
         }
     }
 
