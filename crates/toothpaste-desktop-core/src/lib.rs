@@ -40,6 +40,7 @@ pub struct AppState {
     pub connected_device: Option<Device>,
     pub password_protected: bool,
     pub settings_file_path: Option<String>,
+    pub enable_key_capture: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

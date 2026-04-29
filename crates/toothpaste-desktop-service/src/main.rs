@@ -29,7 +29,12 @@ async fn main() {
         connected_device: None,
         password_protected: false,
         settings_file_path: Some(SETTINGS_FILE_DEFAULT_PATH.to_string()),
+        enable_key_capture: true,
     });
+
+    let mut captured_state = app_state_rx.borrow().clone();
+
+
 
     // Command channel for any commands sent to the BLE task (i.e. to the ToothPaste device)
     let (input_event_tx, input_event_rx) = mpsc::channel::<rdev::Event>(50);
@@ -90,7 +95,7 @@ async fn main() {
     tokio::spawn(ipc_server(
         app_state_rx.clone(),
         app_command_tx.clone(),
-        app_state_tx,
+        app_state_tx.clone(),
         tui_connected_tx,
     ));
     tokio::spawn(auto_connect_task(
@@ -99,9 +104,43 @@ async fn main() {
         tui_connected_rx,
     ));
 
+    // Track currently pressed keys/modifiers
+    let mut pressed_keys = std::collections::HashSet::new();
     // Attach the blocking listener for global input events. This will run indefinitely until the program exits.
     listen(move |event| {
-        let _ = input_event_tx.try_send(event);
+        match event.event_type {
+            // If a key is pressed
+            rdev::EventType::KeyPress(key) => {
+                pressed_keys.insert(key);
+                
+                // Check for Ctrl+Alt+C combo
+                if key == rdev::Key::KeyC {
+                    let has_ctrl = pressed_keys.contains(&rdev::Key::ControlLeft) || pressed_keys.contains(&rdev::Key::ControlRight);
+                    let has_alt = pressed_keys.contains(&rdev::Key::Alt);
+                    
+                    if has_ctrl && has_alt {
+                        let current_state = captured_state.clone();
+                        let new_state = AppState {
+                            enable_key_capture: !current_state.enable_key_capture,
+                            ..current_state
+                        };
+                        println!("Ctrl+Alt+C pressed - toggling key capture to: {}", new_state.enable_key_capture);
+                        captured_state = new_state.clone();
+                        let _ = app_state_tx.send(new_state);
+                    }
+                }
+            }
+            // If a key is released, remove it from the pressed keys set
+            rdev::EventType::KeyRelease(key) => {
+                pressed_keys.remove(&key);
+            }
+            _ => {}
+        }
+        
+        // Forward input events if key capture is enabled
+        if captured_state.enable_key_capture {
+            let _ = input_event_tx.try_send(event);
+        }
     })
     .ok();
 }
