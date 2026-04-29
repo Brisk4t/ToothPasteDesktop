@@ -228,10 +228,7 @@ impl ToothPasteTUI {
     }
 
     fn send_command(&self, cmd: AppCommand) {
-        match self.cmd_tx.try_send(cmd) {
-            Ok(_) => eprintln!("[TUI] Command sent successfully"),
-            Err(e) => eprintln!("[TUI] Failed to send command: {}", e),
-        }
+        let _ = self.cmd_tx.try_send(cmd);
     }
 }
 

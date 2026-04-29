@@ -136,9 +136,6 @@ async fn ble_task(
                 }
             }
             AppCommand::KillService => {
-                eprintln!(">>> KillService COMMAND RECEIVED <<<");
-                std::io::Write::flush(&mut std::io::stderr()).ok();
-                std::io::Write::flush(&mut std::io::stdout()).ok();
                 std::process::exit(0);
             }
             _ => {}
@@ -220,12 +217,7 @@ async fn handle_connection(
                     Ok(Some(text)) => {
                         if let Ok(msg) = serde_json::from_str::<IpcMessage>(&text) {
                             match msg {
-                                IpcMessage::Command(cmd) => { 
-                                    eprintln!("[Service IPC] Received command: {:?}", cmd);
-                                    if let Err(e) = app_command_tx.send(cmd).await {
-                                        eprintln!("[Service IPC] Failed to send command to ble_task: {}", e);
-                                    }
-                                }
+                                IpcMessage::Command(cmd) => { app_command_tx.send(cmd).await.ok(); }
                                 IpcMessage::PairResponse(bytes) => {
                                     if let Ok(arr) = bytes.try_into() {
                                         pair_resp_tx.send(arr).await.ok();

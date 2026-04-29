@@ -65,11 +65,7 @@ async fn ipc_bridge(
             }
 
             Some(cmd) = cmd_rx.recv() => {
-                eprintln!("[IPC Bridge] Forwarding command to service: {:?}", cmd);
-                if write_msg(&mut send, &IpcMessage::Command(cmd)).await.is_err() { 
-                    eprintln!("[IPC Bridge] Failed to write command message");
-                    break; 
-                }
+                if write_msg(&mut send, &IpcMessage::Command(cmd)).await.is_err() { break; }
             }
 
             Some(arr) = pair_resp_rx.recv() => {
