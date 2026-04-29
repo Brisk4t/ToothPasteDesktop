@@ -48,7 +48,7 @@ where
 {
     // Unimplemented
     async fn on_keepalive(&mut self) -> Option<Vec<u8>> {
-        None
+        unimplemented!("Isn't required in the current implementation but ya never know")
     }
 
     // TODO: Update to only signal an unpaired device instead of immediately entering pairing mode
@@ -64,28 +64,13 @@ where
         Some(create_unencrypted_packet(&BASE64.encode(&pub_key)))
     }
 
-    // TODO: Add firmware check later
     async fn on_peer_known(&mut self, firmware_version: &str) -> Option<Vec<u8>> {
-        self.device_observable.send_modify(|d| {
-            d.connected_device = Some(Device {
-                state: DeviceState::Connected {
-                    firmware_version: firmware_version.to_string(),
-                    auth_state: AuthState::Authenticated {
-                        pubkey: "N/A".to_string(),
-                        session_key: "N/A".to_string(),
-                    },
-                },
-                ..d.connected_device.clone().unwrap()
-            })
-        });
-        println!("Device recognised (firmware: {firmware_version}). Awaiting challenge...");
-        None
+        unimplemented!("Firmware does not implement this, placeholder type")
     }
 
     // Derive the session key from the device's challenge and our stored private key.
-    async fn on_challenge(
-        &mut self, challenge_data: &[u8], firmware_version: &str,
-    ) -> Option<Vec<u8>> {
+    /// TODO: Implement firmware version check 
+    async fn on_challenge(&mut self, challenge_data: &[u8], firmware_version: &str) -> Option<Vec<u8>> {
         let mut ecdh = self.ecdh.lock().await;
         match ecdh.load_device_keys(self.device_id, challenge_data) {
             Ok(_) => println!("Session key derived. Authenticated."),
@@ -113,12 +98,7 @@ where
 // --- BLEInterface -------------------------------
 
 /// High-level interface that owns the BLE transport and ECDH crypto context.
-///
-/// After `connect()`, all send methods encrypt the payload with the derived AES-GCM session
-/// key and transmit it over BLE — callers only deal in raw data types (strings, coordinates,
-/// keycodes). The pairing / authentication handshake is fully contained inside
-/// `subscribe_and_handle`; the only thing the caller supplies is a closure that yields the
-/// peer's compressed public key when the device signals it is unrecognised.
+/// Contains the main, permanent loop that processes incoming BLE notifications and outgoing commands from the TUI / Input Hook process.
 pub struct BLEInterface {
     ble: BleManager,
     ecdh: Arc<Mutex<EcdhContext>>,
@@ -251,6 +231,8 @@ impl BLEInterface {
                         }
                     }
                 }
+
+                // Add another channel for select to allow external commands from the TUI to be processed in this loop as well, e.g. disconnect command that breaks the loop and calls `ble_disconnect()`.
             }
         }
     }

@@ -20,6 +20,8 @@ use std::fs;
 async fn main() {
 
     // Channels --------------------------------------------------------------------------------
+
+    // App state observable, owned by this service, watched by TUI
     let (app_state_tx, app_state_rx) = watch::channel(AppState {
         app_version: "0.1.0".to_string(),
         app_string: "ToothPaste Desktop Service".to_string(),
@@ -30,7 +32,10 @@ async fn main() {
         settings_file_path: Some(SETTINGS_FILE_DEFAULT_PATH.to_string()),
     });
 
+    // Command channel for any commands sent to the BLE task (i.e. to the ToothPaste device)
     let (input_event_tx, input_event_rx) = mpsc::channel::<rdev::Event>(50);
+
+    // Command channel for any commands sent from the TUI to the service (e.g. scan, connect, send input, etc.)
     let (app_command_tx, app_command_rx) = mpsc::channel::<AppCommand>(32);
 
     // pair_req: BLE signals the IPC server that the device needs pairing.
@@ -45,7 +50,7 @@ async fn main() {
     let pair_resp_rx = Arc::new(Mutex::new(pair_resp_rx));
 
     // Initialize services ----------------------------------------------------------------------
-    // Initialize storage
+    // Get settings file path from app state (or use default) and initialize storage
     let settings_file_path = app_state_rx.borrow()
         .settings_file_path
         .clone()
@@ -63,6 +68,7 @@ async fn main() {
         }
     }
 
+    // Initialize storage
     let storage = match StorageService::new(db_path, None) {
         Ok(s) => s,
         Err(e) => {
@@ -71,7 +77,7 @@ async fn main() {
         }
     };
 
-    // Initialize BLE
+    // Initialize BLE Interface
     let ble = match BLEInterface::new(storage, app_state_tx.clone(), input_event_rx).await {
         Ok(b) => b,
         Err(e) => {
@@ -88,7 +94,7 @@ async fn main() {
         .ok();
 
 
-    // Spawn ble and IPC tasks --------------------------------------------------------------------------------
+    // Spawn BLE and IPC tasks --------------------------------------------------------------------------------
     tokio::spawn(ble_task(ble, app_command_rx, pair_req_tx, pair_resp_rx));
     tokio::spawn(ipc_server(
         app_state_rx.clone(),
@@ -274,6 +280,7 @@ async fn send_msg<W: AsyncWriteExt + Unpin>(writer: &mut W, msg: &IpcMessage) ->
 
 // ── Auto-connect task ──────────────────────────────────────────────────────────
 
+// Fallback logic to auto-connect to the first available device if TUI doesn't connect within 5 seconds of service startup.
 async fn auto_connect_task(
     mut app_state_rx: watch::Receiver<AppState>,
     app_command_tx: mpsc::Sender<AppCommand>,
@@ -288,7 +295,7 @@ async fn auto_connect_task(
         return;
     }
 
-    println!("TUI not connected after 2s, initiating auto-scan and connect");
+    println!("TUI not connected after 5s, initiating auto-scan and connect");
 
     // Send scan command
     if let Err(e) = app_command_tx.send(AppCommand::ScanForDevices).await {

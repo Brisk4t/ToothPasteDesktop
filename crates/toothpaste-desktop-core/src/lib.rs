@@ -70,8 +70,4 @@ pub enum IpcMessage {
     State(AppState),
     /// TUI → Service: a command to execute.
     Command(AppCommand),
-    /// Service → TUI: device signalled it does not recognise us.
-    PairRequest,
-    /// TUI → Service: compressed P-256 public key (33 bytes).
-    PairResponse(Vec<u8>),
 }
