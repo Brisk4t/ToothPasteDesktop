@@ -4,7 +4,6 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use interprocess::local_socket::{
     GenericNamespaced, ToNsName, tokio::Stream, traits::tokio::Stream as _,
 };
@@ -16,14 +15,7 @@ use toothpaste_desktop_core::{AppCommand, AppState, IPC_SOCKET_NAME, IpcMessage}
 async fn main() -> io::Result<()> {
     let stream = connect_or_spawn().await?;
 
-    let (app_state_tx, app_state_rx) = watch::channel(AppState {
-        app_version: "…".into(),
-        app_string: "ToothPaste Desktop".into(),
-        devices: Vec::new(),
-        auto_connect: None,
-        connected_device: None,
-        password_protected: false,
-    });
+    let (app_state_tx, app_state_rx) = watch::channel(AppState::default());
 
     let (cmd_tx, cmd_rx) = mpsc::channel::<AppCommand>(32);
     let (pair_req_tx, pair_req_rx) = mpsc::channel::<()>(1);
@@ -67,8 +59,7 @@ async fn ipc_bridge(
             }
 
             Some(arr) = pair_resp_rx.recv() => {
-                let b64 = BASE64.encode(arr);
-                if write_msg(&mut send, &IpcMessage::PairResponse(b64)).await.is_err() { break; }
+                if write_msg(&mut send, &IpcMessage::PairResponse(arr.to_vec())).await.is_err() { break; }
             }
         }
     }
@@ -83,12 +74,15 @@ async fn write_msg<W: AsyncWriteExt + Unpin>(writer: &mut W, msg: &IpcMessage) -
 // ── Service discovery / spawn ─────────────────────────────────────────────────
 
 async fn connect_or_spawn() -> io::Result<Stream> {
+    // If the service is already running, connect to it
     if let Ok(s) = try_connect().await {
         return Ok(s);
     }
 
+    // Otherwise, spawn it
     spawn_service();
-
+    
+    // Wait for it to start up (with retries)
     for _ in 0..10 {
         tokio::time::sleep(Duration::from_millis(300)).await;
         if let Ok(s) = try_connect().await {
@@ -96,12 +90,14 @@ async fn connect_or_spawn() -> io::Result<Stream> {
         }
     }
 
+    // If we still can't connect, give up
     Err(io::Error::new(
         io::ErrorKind::ConnectionRefused,
         "Could not connect to toothpaste-desktop-service",
     ))
 }
 
+// Tries to connect to the service. Returns an error if it fails.
 async fn try_connect() -> io::Result<Stream> {
     let name = IPC_SOCKET_NAME
         .to_ns_name::<GenericNamespaced>()
@@ -109,6 +105,7 @@ async fn try_connect() -> io::Result<Stream> {
     Stream::connect(name).await
 }
 
+// Spawns the service as a child process. The service will keep running even after this process exits.
 fn spawn_service() {
     let mut path = std::env::current_exe()
         .ok()

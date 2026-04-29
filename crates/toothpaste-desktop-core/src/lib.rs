@@ -28,7 +28,7 @@ pub struct Device {
     pub signal_strength: i32,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AppState {
     pub app_version: String,
     pub app_string: String,
@@ -67,6 +67,6 @@ pub enum IpcMessage {
     Command(AppCommand),
     /// Service → TUI: device signalled it does not recognise us.
     PairRequest,
-    /// TUI → Service: base64-encoded compressed P-256 public key (33 bytes).
-    PairResponse(String),
+    /// TUI → Service: compressed P-256 public key (33 bytes).
+    PairResponse(Vec<u8>),
 }

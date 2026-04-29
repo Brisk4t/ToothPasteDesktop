@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use interprocess::local_socket::{
     GenericNamespaced, ListenerOptions, ToNsName,
     tokio::{Listener, Stream},
@@ -29,7 +28,7 @@ async fn main() {
     });
 
     let (input_event_tx, input_event_rx) = mpsc::channel::<rdev::Event>(50);
-    let (cmd_tx, cmd_rx) = mpsc::channel::<AppCommand>(32);
+    let (app_command_tx, app_command_rx) = mpsc::channel::<AppCommand>(32);
 
     // pair_req: BLE signals the IPC server that the device needs pairing.
     let (pair_req_tx, pair_req_rx) = mpsc::channel::<()>(1);
@@ -39,6 +38,8 @@ async fn main() {
     let pair_req_rx = Arc::new(Mutex::new(pair_req_rx));
     let pair_resp_rx = Arc::new(Mutex::new(pair_resp_rx));
 
+    // Initialize services ----------------------------------------------------------------------
+    // Initialize storage
     let storage = match StorageService::new(PathBuf::from("toothpaste_storage.json"), None) {
         Ok(s) => s,
         Err(e) => {
@@ -47,6 +48,7 @@ async fn main() {
         }
     };
 
+    // Initialize BLE
     let ble = match BLEInterface::new(storage, app_state_tx, input_event_rx).await {
         Ok(b) => b,
         Err(e) => {
@@ -55,15 +57,19 @@ async fn main() {
         }
     };
 
+    // Send a notification to indicate the service is running
     Notification::new()
         .summary("ToothPaste Desktop Service")
         .body("Service is running...")
         .show()
         .ok();
 
-    tokio::spawn(ble_task(ble, cmd_rx, pair_req_tx, pair_resp_rx));
-    tokio::spawn(ipc_server(app_state_rx, cmd_tx, pair_req_rx, pair_resp_tx));
 
+    // Spawn ble and IPC tasks --------------------------------------------------------------------------------
+    tokio::spawn(ble_task(ble, app_command_rx, pair_req_tx, pair_resp_rx));
+    tokio::spawn(ipc_server(app_state_rx, app_command_tx, pair_req_rx, pair_resp_tx));
+
+    // Attach the blocking listener for global input events. This will run indefinitely until the program exits.
     listen(move |event| {
         let _ = input_event_tx.try_send(event);
     })
@@ -73,10 +79,10 @@ async fn main() {
 // ── BLE task ──────────────────────────────────────────────────────────────────
 
 async fn ble_task(
-    mut ble: BLEInterface, mut cmd_rx: mpsc::Receiver<AppCommand>, pair_req_tx: mpsc::Sender<()>,
+    mut ble: BLEInterface, mut app_command_rx: mpsc::Receiver<AppCommand>, pair_req_tx: mpsc::Sender<()>,
     pair_resp_rx: Arc<Mutex<mpsc::Receiver<[u8; 33]>>>,
 ) {
-    while let Some(cmd) = cmd_rx.recv().await {
+    while let Some(cmd) = app_command_rx.recv().await {
         match cmd {
             AppCommand::ScanForDevices => {
                 if let Err(e) = ble.scan().await {
@@ -123,7 +129,7 @@ async fn ble_task(
 // ── IPC server ────────────────────────────────────────────────────────────────
 
 async fn ipc_server(
-    app_state_rx: watch::Receiver<AppState>, cmd_tx: mpsc::Sender<AppCommand>,
+    app_state_rx: watch::Receiver<AppState>, app_command_tx: mpsc::Sender<AppCommand>,
     pair_req_rx: Arc<Mutex<mpsc::Receiver<()>>>, pair_resp_tx: mpsc::Sender<[u8; 33]>,
 ) {
     let name = match IPC_SOCKET_NAME.to_ns_name::<GenericNamespaced>() {
@@ -149,7 +155,7 @@ async fn ipc_server(
                 handle_connection(
                     stream,
                     app_state_rx.clone(),
-                    cmd_tx.clone(),
+                    app_command_tx.clone(),
                     pair_req_rx.clone(),
                     pair_resp_tx.clone(),
                 )
@@ -162,7 +168,7 @@ async fn ipc_server(
 }
 
 async fn handle_connection(
-    stream: Stream, mut app_state_rx: watch::Receiver<AppState>, cmd_tx: mpsc::Sender<AppCommand>,
+    stream: Stream, mut app_state_rx: watch::Receiver<AppState>, app_command_tx: mpsc::Sender<AppCommand>,
     pair_req_rx: Arc<Mutex<mpsc::Receiver<()>>>, pair_resp_tx: mpsc::Sender<[u8; 33]>,
 ) {
     let (recv, mut send) = stream.split();
@@ -189,12 +195,10 @@ async fn handle_connection(
                     Ok(Some(text)) => {
                         if let Ok(msg) = serde_json::from_str::<IpcMessage>(&text) {
                             match msg {
-                                IpcMessage::Command(cmd) => { cmd_tx.send(cmd).await.ok(); }
-                                IpcMessage::PairResponse(b64) => {
-                                    if let Ok(bytes) = BASE64.decode(&b64) {
-                                        if let Ok(arr) = bytes.try_into() {
-                                            pair_resp_tx.send(arr).await.ok();
-                                        }
+                                IpcMessage::Command(cmd) => { app_command_tx.send(cmd).await.ok(); }
+                                IpcMessage::PairResponse(bytes) => {
+                                    if let Ok(arr) = bytes.try_into() {
+                                        pair_resp_tx.send(arr).await.ok();
                                     }
                                 }
                                 _ => {}
