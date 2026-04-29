@@ -188,19 +188,22 @@ impl ToothPasteTUI {
                 }
             }
             CurrentScreen::PairingInput => self.submit_pair_input(),
-            CurrentScreen::Connected => match self.list_state.selected() {
-                Some(0) => {
-                    self.current_screen = CurrentScreen::PairingInput;
-                    self.pair_input.clear();
-                    self.status = "Enter peer public key (base64):".into();
+            CurrentScreen::Connected => {
+                let authenticated = auth_label(&self.app_state) == "Authenticated";
+                match self.list_state.selected() {
+                    Some(0) if !authenticated => {
+                        self.current_screen = CurrentScreen::PairingInput;
+                        self.pair_input.clear();
+                        self.status = "Enter peer public key (base64):".into();
+                    }
+                    Some(idx) if authenticated && idx == 0 || !authenticated && idx == 1 => {
+                        self.send_command(AppCommand::DisconnectDevice);
+                        self.current_screen = CurrentScreen::Home;
+                        self.status = String::new();
+                    }
+                    _ => {}
                 }
-                Some(1) => {
-                    self.send_command(AppCommand::DisconnectDevice);
-                    self.current_screen = CurrentScreen::Home;
-                    self.status = String::new();
-                }
-                _ => {}
-            },
+            }
         }
     }
 

@@ -210,10 +210,13 @@ fn render_connected(frame: &mut Frame, app: &mut ToothPasteTUI, area: Rect) {
     ]);
     frame.render_widget(Paragraph::new(info).wrap(Wrap { trim: false }), chunks[0]);
 
-    let items = vec![
-        ListItem::new("  Pair Device"),
-        ListItem::new("  Disconnect"),
-    ];
+    let authenticated = auth_label(&app.app_state) == "Authenticated";
+    let mut items = vec![];
+    if !authenticated {
+        items.push(ListItem::new("  Pair Device"));
+    }
+    items.push(ListItem::new("  Disconnect"));
+
     let list = List::new(items)
         .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
         .highlight_symbol("> ");
