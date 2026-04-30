@@ -12,7 +12,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep, Duration};
 use toothpaste_desktop_core::{AppCommand, AppState, IPC_SOCKET_NAME, IpcMessage, SETTINGS_FILE_DEFAULT_PATH};
-use toothpaste_desktop_service::{BLEInterface, storage::StorageService, input::handler::SysInputHandler};
+use toothpaste_desktop_service::{BLEInterface, input::handler::{InputEvent, SysInputHandler}, storage::StorageService};
 use std::fs;
 
 #[tokio::main]
@@ -39,7 +39,7 @@ async fn main() {
 
 
     // Command channel for any commands sent to the BLE task (i.e. to the ToothPaste device)
-    let (input_event_tx, input_event_rx) = mpsc::channel::<rdev::Event>(50);
+    let (input_event_tx, input_event_rx) = mpsc::channel::<InputEvent>(50);
 
     // Command channel for any commands sent from the TUI to the service (e.g. scan, connect, send input, etc.)
     let (app_command_tx, app_command_rx) = mpsc::channel::<AppCommand>(32);
@@ -114,7 +114,7 @@ async fn main() {
     );
     // Move the key handler into the listen closure and call handle_event on each event
     listen(move |event|key_handler.handle_event(event)).ok(); 
-    
+
 }
 
 // ── BLE task ──────────────────────────────────────────────────────────────────

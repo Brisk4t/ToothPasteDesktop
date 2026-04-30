@@ -3,10 +3,16 @@ use std::collections::HashSet;
 use rdev::{Event, EventType, Key};
 use tokio::sync::{mpsc, watch};
 use toothpaste_desktop_core::{AppCommand, AppState};
+use arboard::Clipboard;
+
+pub enum InputEvent {
+    RDevEvent(Event),
+    Clipboard(String),
+}
 
 pub struct SysInputHandler {
     pressed_keys: HashSet<Key>,
-    input_event_tx: mpsc::Sender<Event>,
+    input_event_tx: mpsc::Sender<InputEvent>,
     listen_state_rx: watch::Receiver<AppState>,
     app_state_tx: watch::Sender<AppState>,
     
@@ -18,7 +24,7 @@ pub struct SysInputHandler {
 }
 
 impl SysInputHandler {
-    pub fn new(input_event_tx: mpsc::Sender<Event>,listen_state_rx: watch::Receiver<AppState>, app_state_tx: watch::Sender<AppState>) -> Self {
+    pub fn new(input_event_tx: mpsc::Sender<InputEvent>,listen_state_rx: watch::Receiver<AppState>, app_state_tx: watch::Sender<AppState>) -> Self {
         Self {
             pressed_keys: HashSet::new(),
             input_event_tx,
@@ -63,6 +69,7 @@ impl SysInputHandler {
             EventType::KeyPress(key) => {
                 self.pressed_keys.insert(key);
                 self.handle_disable_capture_event(key);
+                self.handle_clipboard_event(key);
             }
             EventType::KeyRelease(key) => {
                 self.pressed_keys.remove(&key);
@@ -71,14 +78,14 @@ impl SysInputHandler {
         }
                 
         if self.listen_state_rx.borrow().enable_key_capture {
-            let _ = self.input_event_tx.try_send(event);
+            let _ = self.input_event_tx.try_send(InputEvent::RDevEvent(event));
         }
     }
 
 
     fn handle_mouse_click(&mut self, event: Event) {
         if self.listen_state_rx.borrow().enable_key_capture {
-            let _ = self.input_event_tx.try_send(event);
+            let _ = self.input_event_tx.try_send(InputEvent::RDevEvent(event));
         }
     }
 
@@ -137,11 +144,11 @@ impl SysInputHandler {
             // Direction changed, send accumulated delta immediately
             if (self.accumulated_delta.0 != 0.0 || self.accumulated_delta.1 != 0.0) 
                 && self.listen_state_rx.borrow().enable_key_capture {
-                let _ = self.input_event_tx.try_send(Event {
+                let _ = self.input_event_tx.try_send(InputEvent::RDevEvent(Event {
                     time: event_time,
                     name: None,
                     event_type: create_event(self.accumulated_delta),
-                });
+                }));
             }
             // Start new accumulation with current delta
             self.accumulated_delta = delta;
@@ -157,11 +164,11 @@ impl SysInputHandler {
                     // Send accumulated movement if key capture is enabled
                     if (self.accumulated_delta.0 != 0.0 || self.accumulated_delta.1 != 0.0)
                         && self.listen_state_rx.borrow().enable_key_capture {
-                        let _ = self.input_event_tx.try_send(Event {
+                        let _ = self.input_event_tx.try_send(InputEvent::RDevEvent(Event {
                             time: event_time,
                             name: None,
                             event_type: create_event(self.accumulated_delta),
-                        });
+                        }));
                     }
                     // Reset accumulated delta
                     self.accumulated_delta = (0.0, 0.0);
@@ -171,8 +178,17 @@ impl SysInputHandler {
         }
     }
 
-    fn handle_clipboard_event(&mut self, event: Event) {
-        // Implementation for handling clipboard events 
+    fn handle_clipboard_event(&mut self, key: Key) {
+        if key == rdev::Key::KeyV {
+            let has_ctrl = self.pressed_keys.contains(&rdev::Key::ControlLeft) || self.pressed_keys.contains(&rdev::Key::ControlRight);
+            if has_ctrl {
+                let mut clipboard = Clipboard::new().unwrap();
+                if let Ok(contents) = clipboard.get_text() {
+                    println!("Clipboard content captured: {}", contents);
+                    let _ = self.input_event_tx.try_send(InputEvent::Clipboard(contents));
+                }
+            }
+        }
     }
 
     fn handle_disable_capture_event(&mut self, key: Key) {

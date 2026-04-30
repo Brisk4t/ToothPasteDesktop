@@ -2,6 +2,7 @@
 use std::error::Error;
 use std::sync::Arc;
 
+use crate::input::handler::InputEvent;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use prost::Message;
 use rdev::{Event, EventType, Key};
@@ -89,13 +90,13 @@ pub struct BLEInterface {
     ecdh: Arc<Mutex<EcdhContext>>,
     device_id: Option<String>,
     app_state_channel_tx: Sender<AppState>,
-    command_rx: mpsc::Receiver<Event>,
+    command_rx: mpsc::Receiver<InputEvent>,
 }
 
 impl BLEInterface {
     pub async fn new(
         storage: StorageService, app_state_channel_tx: Sender<AppState>,
-        command_rx: mpsc::Receiver<Event>,
+        command_rx: mpsc::Receiver<InputEvent>,
     ) -> Result<Self, Box<dyn Error>> {
         let ble = BleManager::new().await?;
         let ecdh = Arc::new(Mutex::new(EcdhContext::new(storage)));
@@ -205,37 +206,54 @@ impl BLEInterface {
 
                 // Process raw input events from the input hook and send appropriate packets to the device.
                 Some(event) = self.command_rx.recv() => {
-                    
-                    match event.event_type {
-                        EventType::MouseMove{x, y} => {
-                            self.send_mouse(x, y, false, false, 0).await.unwrap_or_else(|e| eprintln!("Failed to send mouse event: {e}"));
-                        },
-                        EventType::ButtonPress(button) => {
-                            let (left, right) = match button {
-                                rdev::Button::Left => (true, false),
-                                rdev::Button::Right => (false, true),
-                                _ => (false, false),
-                            };
-                            self.send_mouse(0.0, 0.0, left, right, 0).await.unwrap_or_else(|e| eprintln!("Failed to send mouse click event: {e}"));
-                        },
-                        EventType::ButtonRelease(button) => {
-                            let (left, right) = match button {
-                                rdev::Button::Left => (false, false),
-                                rdev::Button::Right => (false, false),
-                                _ => (false, false),
-                            };
-                            self.send_mouse(0.0, 0.0, left, right, 0).await.unwrap_or_else(|e| eprintln!("Failed to send mouse click release event: {e}"));
-                        },
-                        EventType::Wheel { delta_x, delta_y } => {
-                            println!("Scroll event sent: delta_x={}, delta_y={}", delta_x, delta_y);
-                            self.send_mouse(0.0, 0.0, false, false, delta_y as i32).await.unwrap_or_else(|e| eprintln!("Failed to send mouse wheel event: {e}"));
-                        },
-                        EventType::KeyPress(_) | EventType::KeyRelease(_) => {
-                            if let Some(key) = event.name {
-                                self.send_keyboard_string(key.as_str()).await.unwrap_or_else(|e| eprintln!("Failed to send keyboard event: {e}"));
+                    match event {
+                        InputEvent::RDevEvent(event) => {
+                            match event.event_type {
+                                EventType::MouseMove{x, y} => {
+                                    self.send_mouse(x, y, false, false, 0).await.unwrap_or_else(|e| eprintln!("Failed to send mouse event: {e}"));
+                                },
+                                EventType::ButtonPress(button) => {
+                                    let (left, right) = match button {
+                                        rdev::Button::Left => (true, false),
+                                        rdev::Button::Right => (false, true),
+                                        _ => (false, false),
+                                    };
+                                    self.send_mouse(0.0, 0.0, left, right, 0).await.unwrap_or_else(|e| eprintln!("Failed to send mouse click event: {e}"));
+                                },
+                                EventType::ButtonRelease(button) => {
+                                    let (left, right) = match button {
+                                        rdev::Button::Left => (false, false),
+                                        rdev::Button::Right => (false, false),
+                                        _ => (false, false),
+                                    };
+                                    self.send_mouse(0.0, 0.0, left, right, 0).await.unwrap_or_else(|e| eprintln!("Failed to send mouse click release event: {e}"));
+                                },
+                                EventType::Wheel { delta_x, delta_y } => {
+                                    println!("Scroll event sent: delta_x={}, delta_y={}", delta_x, delta_y);
+                                    self.send_mouse(0.0, 0.0, false, false, delta_y as i32).await.unwrap_or_else(|e| eprintln!("Failed to send mouse wheel event: {e}"));
+                                },
+                                EventType::KeyPress(_) | EventType::KeyRelease(_) => {
+                                    if let Some(key) = event.name {
+                                        self.send_keyboard_string(key.as_str()).await.unwrap_or_else(|e| eprintln!("Failed to send keyboard event: {e}"));
+                                    }
+                                }
+                                _ => { /* Handle other event types if needed */}
                             }
                         }
-                        _ => { /* Handle other event types if needed */}
+                        InputEvent::Clipboard(text) => {
+                            let sanitized = text
+                                .trim()
+                                .chars()
+                                .filter(|c| c.is_ascii_graphic() || *c == ' ')
+                                .collect::<String>();
+                            if !sanitized.is_empty() {
+                                println!("Sending clipboard text ({} chars) in chunks", sanitized.len());
+                                self.send_keyboard_stream(sanitized.as_str()).await
+                                    .unwrap_or_else(|e| eprintln!("Failed to send clipboard text: {e}"));
+                            } else {
+                                println!("Clipboard text contained no valid ASCII characters");
+                            }
+                        }
                     }
                 }
 
@@ -287,6 +305,14 @@ impl BLEInterface {
     pub async fn send_keyboard_string(&self, text: &str) -> Result<(), Box<dyn Error>> {
         self.encrypt_and_send(packets::create_keyboard_packet(text))
             .await
+    }
+
+    pub async fn send_keyboard_stream(&self, text: &str) -> Result<(), Box<dyn Error>> {
+        let packets_vec = packets::create_keyboard_stream(text);
+        for packet in packets_vec {
+            self.encrypt_and_send(packet).await?;
+        }
+        Ok(())
     }
 
     pub async fn send_keycode(&self, code: &[u8]) -> Result<(), Box<dyn Error>> {
