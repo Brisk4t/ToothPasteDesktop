@@ -5,3 +5,4 @@ pub use modules::ble::BleManager;
 pub use modules::ble::interface::BLEInterface;
 pub use modules::crypto;
 pub use modules::storage;
+pub use modules::input;

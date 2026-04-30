@@ -203,11 +203,21 @@ impl BLEInterface {
                     };
                 }
 
+                // Process raw input events from the input hook and send appropriate packets to the device.
                 Some(event) = self.command_rx.recv() => {
-                    if let Some(key) = event.name {
-                        if let Err(e) = self.send_keyboard_string(key.as_str()).await {
-                            eprintln!("Failed to send keyboard event: {e}");
+                    
+                    match event.event_type {
+                        EventType::MouseMove{x, y} => {
+                            self.send_mouse(x, y, false, false).await.unwrap_or_else(|e| eprintln!("Failed to send mouse event: {e}"));
+                        },
+                        EventType::KeyPress(_) | EventType::KeyRelease(_) => {
+                            if let Some(key) = event.name {
+                                if let Err(e) = self.send_keyboard_string(key.as_str()).await {
+                                    eprintln!("Failed to send keyboard event: {e}");
+                                }
+                            }
                         }
+                        _ => { /* Handle other event types if needed */}
                     }
                 }
 

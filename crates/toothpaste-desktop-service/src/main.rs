@@ -12,7 +12,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep, Duration};
 use toothpaste_desktop_core::{AppCommand, AppState, IPC_SOCKET_NAME, IpcMessage, SETTINGS_FILE_DEFAULT_PATH};
-use toothpaste_desktop_service::{BLEInterface, storage::StorageService};
+use toothpaste_desktop_service::{BLEInterface, storage::StorageService, input::handler::SysInputHandler};
 use std::fs;
 
 #[tokio::main]
@@ -106,44 +106,15 @@ async fn main() {
         tui_connected_rx,
     ));
 
-    // Track currently pressed keys/modifiers
-    let mut pressed_keys = std::collections::HashSet::new();
-    // Attach the blocking listener for global input events. This will run indefinitely until the program exits.
-    listen(move |event| {
-        match event.event_type {
-            // If a key is pressed
-            rdev::EventType::KeyPress(key) => {
-                pressed_keys.insert(key);
-                
-                // Check for Ctrl+Alt+C combo
-                if key == rdev::Key::KeyC {
-                    let has_ctrl = pressed_keys.contains(&rdev::Key::ControlLeft) || pressed_keys.contains(&rdev::Key::ControlRight);
-                    let has_alt = pressed_keys.contains(&rdev::Key::Alt);
-                    
-                    if has_ctrl && has_alt {
-                        let current_state = listen_state_rx.borrow().clone();
-                        let new_state = AppState {
-                            enable_key_capture: !current_state.enable_key_capture,
-                            ..current_state
-                        };
-                        println!("Ctrl+Alt+C pressed - toggling key capture to: {}", new_state.enable_key_capture);
-                        let _ = app_state_tx.send(new_state);
-                    }
-                }
-            }
-            // If a key is released, remove it from the pressed keys set
-            rdev::EventType::KeyRelease(key) => {
-                pressed_keys.remove(&key);
-            }
-            _ => {}
-        }
-        
-        // Forward input events if key capture is enabled
-        if listen_state_rx.borrow().enable_key_capture {
-            let _ = input_event_tx.try_send(event);
-        }
-    })
-    .ok();
+    // Initialize the key handler struct
+    let mut key_handler = SysInputHandler::new(
+        input_event_tx.clone(),
+        listen_state_rx.clone(),
+        app_state_tx.clone(),
+    );
+    // Move the key handler into the listen closure and call handle_event on each event
+    listen(move |event|key_handler.handle_event(event)).ok(); 
+    
 }
 
 // ── BLE task ──────────────────────────────────────────────────────────────────
