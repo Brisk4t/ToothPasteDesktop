@@ -10,8 +10,10 @@ path = "src/main.rs"
 [dependencies]
 toothpaste-desktop-core = { path = "../toothpaste-desktop-core" }
 ratatui = { version = "0.30.0" }
+throbber-widgets-tui = "0.11"
 crossterm = "0.29.0"
 tokio = { version = "1.52.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 interprocess = { version = "2", features = ["tokio"] }
 serde_json = "1"
 base64 = "0.22"
+tui-big-text = "0.8.4"

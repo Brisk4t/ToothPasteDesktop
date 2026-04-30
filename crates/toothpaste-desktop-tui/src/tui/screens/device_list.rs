@@ -7,6 +7,7 @@ use ratatui::{
     text::Line,
     widgets::{List, ListItem, ListState, Paragraph},
 };
+use throbber_widgets_tui::{Throbber, ThrobberState};
 use tokio::sync::{mpsc, watch};
 use toothpaste_desktop_core::{AppCommand, AppState};
 
@@ -16,6 +17,8 @@ pub struct DeviceListScreen {
     list_state: ListState,
     cmd_tx: mpsc::Sender<AppCommand>,
     app_state_rx: watch::Receiver<AppState>,
+    connecting_to: Option<String>,
+    throbber_state: ThrobberState,
     status: String,
 }
 
@@ -31,6 +34,8 @@ impl DeviceListScreen {
             list_state,
             cmd_tx,
             app_state_rx,
+            connecting_to: None,
+            throbber_state: ThrobberState::default(),
             status: format!("{} device(s) found", initial_state.devices.len()),
         }
     }
@@ -42,6 +47,9 @@ impl DeviceListScreen {
 
 impl InputHandler for DeviceListScreen {
     fn handle_nav_key(&mut self, key: KeyEvent) -> NavSignal {
+        if self.connecting_to.is_some() {
+            return NavSignal::Command;
+        }
         match key.code {
             KeyCode::Up => {
                 self.list_state.select_previous();
@@ -61,11 +69,14 @@ impl InputHandler for DeviceListScreen {
     }
 
     fn handle_enter_key(&mut self, _key: KeyEvent) -> NavSignal {
+        if self.connecting_to.is_some() {
+            return NavSignal::Command;
+        }
         let app_state = self.app_state_rx.borrow();
         if let Some(idx) = self.list_state.selected() {
             if let Some(device) = app_state.devices.get(idx).cloned() {
                 drop(app_state);
-                self.status = format!("Connecting to {}…", device.name);
+                self.connecting_to = Some(device.name.clone());
                 self.send(AppCommand::ConnectToDevice(device));
             }
         }
@@ -75,6 +86,15 @@ impl InputHandler for DeviceListScreen {
 
 impl Screen for DeviceListScreen {
     fn render(&mut self, frame: &mut Frame, area: Rect) {
+        if let Some(name) = &self.connecting_to {
+            let [row, _] =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+            self.throbber_state.calc_next();
+            let throbber = Throbber::default().label(format!("  Connecting to {}…", name));
+            frame.render_stateful_widget(throbber, row, &mut self.throbber_state);
+            return;
+        }
+
         let app_state = self.app_state_rx.borrow();
 
         let chunks = Layout::default()
@@ -113,11 +133,15 @@ impl Screen for DeviceListScreen {
     }
 
     fn status(&self) -> &str {
-        &self.status
+        if self.connecting_to.is_some() { "" } else { &self.status }
     }
 
     fn nav_hints(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("<S>", " Rescan")]
+        if self.connecting_to.is_some() {
+            vec![]
+        } else {
+            vec![("<S>", " Rescan")]
+        }
     }
 }
 

@@ -56,9 +56,19 @@ fn render_side_panel(frame: &mut Frame, app: &ToothPasteTUI, area: Rect) {
 
     let state = &app.app_state;
 
+    let (svc_label, svc_color) = if app.service_available {
+        ("● Running", Color::Green)
+    } else {
+        ("○ Not running", Color::Red)
+    };
+
     let mut lines: Vec<Line> = vec![
         Line::from(vec![
-            Span::styled("Version  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Service:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(svc_label, Style::default().fg(svc_color)),
+        ]),
+        Line::from(vec![
+            Span::styled("Version   ", Style::default().fg(Color::DarkGray)),
             Span::raw(&state.app_version),
         ]),
         Line::from(vec![

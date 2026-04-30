@@ -27,22 +27,34 @@ pub struct ToothPasteTUI {
     current_screen: ScreenVariant,
     screen_stack: Vec<ScreenVariant>,
     pub app_state: AppState,
+    pub service_available: bool,
     exit: bool,
 
     app_state_rx: watch::Receiver<AppState>,
+    service_available_rx: watch::Receiver<bool>,
     cmd_tx: mpsc::Sender<AppCommand>,
 }
 
 
 impl ToothPasteTUI {
-    fn new(app_state_rx: watch::Receiver<AppState>, cmd_tx: mpsc::Sender<AppCommand>) -> Self {
+    fn new(
+        app_state_rx: watch::Receiver<AppState>,
+        service_available_rx: watch::Receiver<bool>,
+        cmd_tx: mpsc::Sender<AppCommand>,
+    ) -> Self {
         let app_state = app_state_rx.borrow().clone();
+        let service_available = *service_available_rx.borrow();
         Self {
-            current_screen: ScreenVariant::Home(HomeScreen::new(cmd_tx.clone())),
+            current_screen: ScreenVariant::Home(HomeScreen::new(
+                cmd_tx.clone(),
+                service_available_rx.clone(),
+            )),
             screen_stack: Vec::new(),
             app_state,
+            service_available,
             exit: false,
             app_state_rx,
+            service_available_rx,
             cmd_tx,
         }
     }
@@ -64,6 +76,18 @@ impl ToothPasteTUI {
     }
 
     fn sync_app_state(&mut self) {
+        if self.service_available_rx.has_changed().unwrap_or(false) {
+            let now_available = *self.service_available_rx.borrow_and_update();
+            if !now_available && self.service_available {
+                self.screen_stack.clear();
+                self.current_screen = ScreenVariant::Home(HomeScreen::new(
+                    self.cmd_tx.clone(),
+                    self.service_available_rx.clone(),
+                ));
+            }
+            self.service_available = now_available;
+        }
+
         if !self.app_state_rx.has_changed().unwrap_or(false) {
             return;
         }
@@ -188,6 +212,7 @@ pub fn capture_label(state: &AppState) -> &'static str {
 
 pub fn start_tui(
     app_state_rx: watch::Receiver<AppState>,
+    service_available_rx: watch::Receiver<bool>,
     cmd_tx: mpsc::Sender<AppCommand>,
 ) -> io::Result<()> {
     enable_raw_mode()?;
@@ -196,7 +221,7 @@ pub fn start_tui(
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    let mut app = ToothPasteTUI::new(app_state_rx, cmd_tx);
+    let mut app = ToothPasteTUI::new(app_state_rx, service_available_rx, cmd_tx);
     let result = app.run(&mut terminal);
 
     disable_raw_mode()?;
