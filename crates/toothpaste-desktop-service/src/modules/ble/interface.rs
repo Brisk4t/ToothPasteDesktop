@@ -208,13 +208,31 @@ impl BLEInterface {
                     
                     match event.event_type {
                         EventType::MouseMove{x, y} => {
-                            self.send_mouse(x, y, false, false).await.unwrap_or_else(|e| eprintln!("Failed to send mouse event: {e}"));
+                            self.send_mouse(x, y, false, false, 0).await.unwrap_or_else(|e| eprintln!("Failed to send mouse event: {e}"));
+                        },
+                        EventType::ButtonPress(button) => {
+                            let (left, right) = match button {
+                                rdev::Button::Left => (true, false),
+                                rdev::Button::Right => (false, true),
+                                _ => (false, false),
+                            };
+                            self.send_mouse(0.0, 0.0, left, right, 0).await.unwrap_or_else(|e| eprintln!("Failed to send mouse click event: {e}"));
+                        },
+                        EventType::ButtonRelease(button) => {
+                            let (left, right) = match button {
+                                rdev::Button::Left => (false, false),
+                                rdev::Button::Right => (false, false),
+                                _ => (false, false),
+                            };
+                            self.send_mouse(0.0, 0.0, left, right, 0).await.unwrap_or_else(|e| eprintln!("Failed to send mouse click release event: {e}"));
+                        },
+                        EventType::Wheel { delta_x, delta_y } => {
+                            println!("Scroll event sent: delta_x={}, delta_y={}", delta_x, delta_y);
+                            self.send_mouse(0.0, 0.0, false, false, delta_y as i32).await.unwrap_or_else(|e| eprintln!("Failed to send mouse wheel event: {e}"));
                         },
                         EventType::KeyPress(_) | EventType::KeyRelease(_) => {
                             if let Some(key) = event.name {
-                                if let Err(e) = self.send_keyboard_string(key.as_str()).await {
-                                    eprintln!("Failed to send keyboard event: {e}");
-                                }
+                                self.send_keyboard_string(key.as_str()).await.unwrap_or_else(|e| eprintln!("Failed to send keyboard event: {e}"));
                             }
                         }
                         _ => { /* Handle other event types if needed */}
@@ -277,9 +295,9 @@ impl BLEInterface {
     }
 
     pub async fn send_mouse(
-        &self, x: f64, y: f64, left: bool, right: bool,
+        &self, x: f64, y: f64, left: bool, right: bool, wheel: i32,
     ) -> Result<(), Box<dyn Error>> {
-        self.encrypt_and_send(packets::create_mouse_packet(x, y, left, right))
+        self.encrypt_and_send(packets::create_mouse_packet(x, y, left, right, wheel))
             .await
     }
 

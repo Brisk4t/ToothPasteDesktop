@@ -21,7 +21,7 @@ pub fn create_unencrypted_packet(input: &str) -> Vec<u8> {
     .encode_to_vec()
 }
 
-pub fn create_mouse_packet(x: f64, y: f64, left_click: bool, right_click: bool) -> EncryptedData {
+pub fn create_mouse_packet(x: f64, y: f64, left_click: bool, right_click: bool, scroll_delta: i32) -> EncryptedData {
     let mouse_packet = MousePacket {
         num_frames: 1,
         frames: vec![Frame {
@@ -30,7 +30,7 @@ pub fn create_mouse_packet(x: f64, y: f64, left_click: bool, right_click: bool) 
         }],
         l_click: left_click as i32,
         r_click: right_click as i32,
-        wheel: 0,
+        wheel: scroll_delta,
     };
     EncryptedData {
         packet_type: encrypted_data::PacketType::Mouse as i32,

@@ -13,6 +13,7 @@ pub struct SysInputHandler {
     mouse_last_position: (f64, f64),
     accumulated_delta: (f64, f64),
     mouse_debounce_threshold_ms: u64,
+    scroll_debounce_threshold_ms: u64,
     mouse_last_event_time: std::time::SystemTime,
 }
 
@@ -26,26 +27,30 @@ impl SysInputHandler {
             mouse_last_position: (0.0, 0.0),
             accumulated_delta: (0.0, 0.0),
             mouse_debounce_threshold_ms: 50,
+            scroll_debounce_threshold_ms: 100,
             mouse_last_event_time: std::time::SystemTime::now(),
         }
     }
 
     pub fn handle_event(&mut self, event: Event) {
         match event.event_type {
-            // If a key is pressed
-            EventType::KeyPress(key) => {
+            // Keyboard event
+            EventType::KeyPress(_) | EventType::KeyRelease(_) => {
                 self.handle_keyboard_event(event);
                 
             }
-            // If a key is released, remove it from the pressed keys set
-            EventType::KeyRelease(key) => {
-                self.handle_keyboard_event(event);
-            }
-
             EventType::MouseMove{..} => {
-                self.handle_mouse_event(event);
+                self.handle_mouse_move(event);
             }
 
+            EventType::ButtonPress(_) | EventType::ButtonRelease(_) => {
+                self.handle_mouse_click(event);
+            }
+
+            // Disable wheel events for now
+            // EventType::Wheel {..} => {
+            //     self.handle_scroll_event(event);
+            // }
             _ => {
                 println!("Received non-key event: {:?}", event);
             }
@@ -70,7 +75,29 @@ impl SysInputHandler {
         }
     }
 
-    fn handle_mouse_event(&mut self, event: Event) {
+
+    fn handle_mouse_click(&mut self, event: Event) {
+        if self.listen_state_rx.borrow().enable_key_capture {
+            let _ = self.input_event_tx.try_send(event);
+        }
+    }
+
+    fn handle_scroll_event(&mut self, event: Event) {
+        if let EventType::Wheel { delta_x, delta_y } = event.event_type {
+            println!("Scroll event detected: delta_x={}, delta_y={}", delta_x, delta_y);
+            self.process_accumulated_event(
+                (delta_x as f64, delta_y as f64),
+                event.time,
+                self.scroll_debounce_threshold_ms,
+                |delta| EventType::Wheel {
+                    delta_x: delta.0 as i64,
+                    delta_y: delta.1 as i64,
+                },
+            );
+        }
+    }
+
+    fn handle_mouse_move(&mut self, event: Event) {
         if let EventType::MouseMove { x, y } = event.event_type {
             // Calculate delta from last observed position (every event)
             let delta_x = x - self.mouse_last_position.0;
@@ -78,53 +105,67 @@ impl SysInputHandler {
             
             // Always update to current position
             self.mouse_last_position = (x, y);
+            
+            self.process_accumulated_event(
+                (delta_x, delta_y),
+                event.time,
+                self.mouse_debounce_threshold_ms,
+                |delta| EventType::MouseMove {
+                    x: delta.0,
+                    y: delta.1,
+                },
+            );
+        }
+    }
 
-            // Check if direction changed
-            let x_direction_changed = (delta_x > 0.0 && self.accumulated_delta.0 < 0.0) || 
-                                      (delta_x < 0.0 && self.accumulated_delta.0 > 0.0);
-            let y_direction_changed = (delta_y > 0.0 && self.accumulated_delta.1 < 0.0) || 
-                                      (delta_y < 0.0 && self.accumulated_delta.1 > 0.0);
+    /// Generic accumulator handler for events with directional deltas (mouse, scroll, etc.)
+    /// Sends accumulated delta on direction change or debounce threshold.
+    fn process_accumulated_event(
+        &mut self,
+        delta: (f64, f64),
+        event_time: std::time::SystemTime,
+        debounce_threshold_ms: u64,
+        create_event: impl Fn((f64, f64)) -> EventType,
+    ) {
+        // Check if direction changed
+        let x_direction_changed = (delta.0 > 0.0 && self.accumulated_delta.0 < 0.0) || 
+                                  (delta.0 < 0.0 && self.accumulated_delta.0 > 0.0);
+        let y_direction_changed = (delta.1 > 0.0 && self.accumulated_delta.1 < 0.0) || 
+                                  (delta.1 < 0.0 && self.accumulated_delta.1 > 0.0);
 
-            if x_direction_changed || y_direction_changed {
-                // Direction changed, send accumulated delta immediately
-                if (self.accumulated_delta.0 != 0.0 || self.accumulated_delta.1 != 0.0) 
-                    && self.listen_state_rx.borrow().enable_key_capture {
-                    let _ = self.input_event_tx.try_send(Event {
-                        time: event.time,
-                        name: None,
-                        event_type: EventType::MouseMove {
-                            x: self.accumulated_delta.0,
-                            y: self.accumulated_delta.1,
-                        },
-                    });
-                }
-                // Start new accumulation with current delta
-                self.accumulated_delta = (delta_x, delta_y);
-                self.mouse_last_event_time = event.time;
-            } else {
-                // Direction is monotonic, accumulate
-                self.accumulated_delta.0 += delta_x;
-                self.accumulated_delta.1 += delta_y;
-                
-                // Check if debounce threshold passed
-                if let Ok(elapsed) = event.time.duration_since(self.mouse_last_event_time) {
-                    if elapsed.as_millis() >= self.mouse_debounce_threshold_ms as u128 {
-                        // Send accumulated movement if key capture is enabled
-                        if (self.accumulated_delta.0 != 0.0 || self.accumulated_delta.1 != 0.0)
-                            && self.listen_state_rx.borrow().enable_key_capture {
-                            let _ = self.input_event_tx.try_send(Event {
-                                time: event.time,
-                                name: None,
-                                event_type: EventType::MouseMove {
-                                    x: self.accumulated_delta.0,
-                                    y: self.accumulated_delta.1,
-                                },
-                            });
-                        }
-                        // Reset accumulated delta
-                        self.accumulated_delta = (0.0, 0.0);
-                        self.mouse_last_event_time = event.time;
+        if x_direction_changed || y_direction_changed {
+            // Direction changed, send accumulated delta immediately
+            if (self.accumulated_delta.0 != 0.0 || self.accumulated_delta.1 != 0.0) 
+                && self.listen_state_rx.borrow().enable_key_capture {
+                let _ = self.input_event_tx.try_send(Event {
+                    time: event_time,
+                    name: None,
+                    event_type: create_event(self.accumulated_delta),
+                });
+            }
+            // Start new accumulation with current delta
+            self.accumulated_delta = delta;
+            self.mouse_last_event_time = event_time;
+        } else {
+            // Direction is monotonic, accumulate
+            self.accumulated_delta.0 += delta.0;
+            self.accumulated_delta.1 += delta.1;
+            
+            // Check if debounce threshold passed
+            if let Ok(elapsed) = event_time.duration_since(self.mouse_last_event_time) {
+                if elapsed.as_millis() >= debounce_threshold_ms as u128 {
+                    // Send accumulated movement if key capture is enabled
+                    if (self.accumulated_delta.0 != 0.0 || self.accumulated_delta.1 != 0.0)
+                        && self.listen_state_rx.borrow().enable_key_capture {
+                        let _ = self.input_event_tx.try_send(Event {
+                            time: event_time,
+                            name: None,
+                            event_type: create_event(self.accumulated_delta),
+                        });
                     }
+                    // Reset accumulated delta
+                    self.accumulated_delta = (0.0, 0.0);
+                    self.mouse_last_event_time = event_time;
                 }
             }
         }
