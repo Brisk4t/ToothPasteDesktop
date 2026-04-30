@@ -25,10 +25,6 @@ impl ScanningScreen {
 impl InputHandler for ScanningScreen {
     fn handle_nav_key(&mut self, key: KeyEvent) -> NavSignal {
         match key.code {
-            KeyCode::Char('s') | KeyCode::Char('S') => {
-                let _ = self.cmd_tx.try_send(AppCommand::ScanForDevices);
-                NavSignal::Command
-            }
             KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => NavSignal::Back,
             _ => NavSignal::Command,
         }
@@ -54,7 +50,4 @@ impl Screen for ScanningScreen {
         "Scanning for devices..."
     }
 
-    fn nav_hints(&self) -> Vec<&'static str> {
-        vec!["<S> Rescan"]
-    }
 }

@@ -42,13 +42,13 @@ pub enum ScreenVariant {
 pub trait Screen: InputHandler {
     fn render(&mut self, frame: &mut Frame, area: Rect);
     fn status(&self) -> &str { "" }
-    fn nav_hints(&self) -> Vec<&'static str> { vec![] }
+    fn nav_hints(&self) -> Vec<(&'static str, &'static str)> { vec![] }
 
-    fn render_outer_block(frame: &mut Frame, area: Rect, nav_hints: Vec<&str>) {
+    fn render_outer_block(frame: &mut Frame, area: Rect, nav_hints: Vec<(&str, &str)>) {
         let title = Line::from(vec![" ".into(), "ToothPaste".bold(), " ".into()]);
         let hint_spans: Vec<Span> = nav_hints
             .into_iter()
-            .flat_map(|hint| vec![" ".into(), hint.blue().bold(), " ".into()])
+            .flat_map(|(key, desc)| vec![" ".into(), key.blue().bold(), desc.into()])
             .collect();
         let instructions = Line::from(
             [
@@ -128,7 +128,7 @@ impl Screen for ScreenVariant {
         }
     }
 
-    fn nav_hints(&self) -> Vec<&'static str> {
+    fn nav_hints(&self) -> Vec<(&'static str, &'static str)> {
         match self {
             ScreenVariant::Home(s) => s.nav_hints(),
             ScreenVariant::Scanning(s) => s.nav_hints(),

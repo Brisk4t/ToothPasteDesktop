@@ -10,7 +10,7 @@ use ratatui::{
 use tokio::sync::{mpsc, watch};
 use toothpaste_desktop_core::{AppCommand, AppState};
 
-use super::{InputHandler, NavSignal, Screen};
+use super::{InputHandler, NavSignal, Screen, ScreenVariant, ScanningScreen};
 
 pub struct DeviceListScreen {
     list_state: ListState,
@@ -50,6 +50,10 @@ impl InputHandler for DeviceListScreen {
             KeyCode::Down => {
                 self.list_state.select_next();
                 NavSignal::Command
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                self.send(AppCommand::ScanForDevices);
+                NavSignal::Screen(ScreenVariant::Scanning(ScanningScreen::new(self.cmd_tx.clone())))
             }
             KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => NavSignal::Back,
             _ => NavSignal::Command,
@@ -110,6 +114,10 @@ impl Screen for DeviceListScreen {
 
     fn status(&self) -> &str {
         &self.status
+    }
+
+    fn nav_hints(&self) -> Vec<(&'static str, &'static str)> {
+        vec![("<S>", " Rescan")]
     }
 }
 

@@ -149,7 +149,7 @@ impl ToothPasteTUI {
         self.current_screen.status()
     }
 
-    pub fn nav_hints(&self) -> Vec<&'static str> {
+    pub fn nav_hints(&self) -> Vec<(&'static str, &'static str)> {
         self.current_screen.nav_hints()
     }
 }
