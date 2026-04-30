@@ -253,6 +253,10 @@ impl BLEInterface {
                                 println!("Clipboard text contained no valid ASCII characters");
                             }
                         }
+                        InputEvent::Keycode(codes) => {
+                            self.send_keycode(&codes).await
+                                .unwrap_or_else(|e| eprintln!("Failed to send keycode: {e}"));
+                        }
                     }
                 }
 

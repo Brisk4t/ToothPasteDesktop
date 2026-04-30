@@ -1,13 +1,24 @@
 use std::collections::HashSet;
 use rdev::{Event, EventType, Key};
-use tokio::{sync::{mpsc, watch}, time::Timeout};
+use tokio::sync::{mpsc, watch};
 use toothpaste_desktop_core::{AppCommand, AppState};
 use arboard::Clipboard;
 use notify_rust::Notification;
 
+use super::hidmap::{key_to_hid, key_to_ascii};
+
 pub enum InputEvent {
     RDevEvent(Event),
     Clipboard(String),
+    Keycode(Vec<u8>),
+}
+
+/// Represents a key combo (modifiers + target key)
+struct KeyCombo {
+    requires_ctrl: bool,
+    requires_alt: bool,
+    requires_shift: bool,
+    target_key: Key,
 }
 
 pub struct SysInputHandler {
@@ -49,6 +60,62 @@ impl SysInputHandler {
         let _ = self.app_state_tx.send(new_state);
     }
 
+    /// Check if a key combo is currently active (modifiers pressed)
+    fn is_combo_active(&self, combo: &KeyCombo) -> bool {
+        let has_ctrl = (combo.requires_ctrl) && 
+            (self.pressed_keys.contains(&Key::ControlLeft) || self.pressed_keys.contains(&Key::ControlRight));
+        let has_alt = (combo.requires_alt) && 
+            (self.pressed_keys.contains(&Key::Alt) || self.pressed_keys.contains(&Key::AltGr));
+        let has_shift = (combo.requires_shift) && 
+            (self.pressed_keys.contains(&Key::ShiftLeft) || self.pressed_keys.contains(&Key::ShiftRight));
+        
+        let ctrl_ok = !combo.requires_ctrl || has_ctrl;
+        let alt_ok = !combo.requires_alt || has_alt;
+        let shift_ok = !combo.requires_shift || has_shift;
+        
+        ctrl_ok && alt_ok && shift_ok
+    }
+
+    /// Generate HID report for a key combo (8-byte format: modifiers[0-4], key[5], reserved[6-7])
+    /// Uses HID map for special keys, falls back to ASCII code for printing characters
+    fn build_hid_report(&self, combo: &KeyCombo) -> Option<[u8; 8]> {
+        let mut report = [0u8; 8];
+        let mut modifier_idx = 0;
+        
+        // Add modifiers at indices 0-4
+        if combo.requires_ctrl {
+            if let Some(code) = key_to_hid(&Key::ControlLeft) {
+                if modifier_idx < 5 {
+                    report[modifier_idx] = code;
+                    modifier_idx += 1;
+                }
+            }
+        }
+        if combo.requires_shift {
+            if let Some(code) = key_to_hid(&Key::ShiftLeft) {
+                if modifier_idx < 5 {
+                    report[modifier_idx] = code;
+                    modifier_idx += 1;
+                }
+            }
+        }
+        if combo.requires_alt {
+            if let Some(code) = key_to_hid(&Key::Alt) {
+                if modifier_idx < 5 {
+                    report[modifier_idx] = code;
+                    modifier_idx += 1;
+                }
+            }
+        }
+        
+        // Add key at index 5 - try HID map first, then ASCII code for printing chars
+        let key_code = key_to_hid(&combo.target_key)
+            .or_else(|| key_to_ascii(&combo.target_key))?;
+        report[5] = key_code;
+        
+        Some(report)
+    }
+
     pub fn handle_event(&mut self, event: Event) {
         self.current_state = self.get_state();
         
@@ -75,21 +142,53 @@ impl SysInputHandler {
     }
 
     fn handle_keyboard_event(&mut self, event: Event) {
+        println!("Received keyboard event: {:?}", event);
         match event.event_type {
             EventType::KeyPress(key) => {
                 self.pressed_keys.insert(key);
+                
+                // Check for special combos first (these don't send to device, they control the app)
                 self.handle_disable_key_capture_event(key);
                 self.handle_disable_clipboard_capture_event(key);
-                self.handle_clipboard_event(key);
+                self.handle_clipboard_event(key);   // Handle clipboard capture (Ctrl+V)
+
+                if self.current_state.enable_key_capture {
+                    
+                    // Build combo with current modifiers and send to device
+                    let combo = KeyCombo {
+                        requires_ctrl: self.pressed_keys.contains(&Key::ControlLeft) || self.pressed_keys.contains(&Key::ControlRight),
+                        requires_alt: self.pressed_keys.contains(&Key::Alt) || self.pressed_keys.contains(&Key::AltGr),
+                        requires_shift: self.pressed_keys.contains(&Key::ShiftLeft) || self.pressed_keys.contains(&Key::ShiftRight),
+                        target_key: key,
+                    };
+                    
+                    println!("Current pressed keys: {:?}, constructed combo: ctrl={}, alt={}, shift={}, key={:?}", 
+                        self.pressed_keys, combo.requires_ctrl, combo.requires_alt, combo.requires_shift, combo.target_key);
+                    
+                    // Decision tree:
+                    // 1. If has modifiers -> send as HID report (for any key: special or printing)
+                    // 2. Else if special key (in HID map) -> send as HID report
+                    // 3. Else if printing char -> send as RDevEvent
+                    let has_modifiers = combo.requires_ctrl || combo.requires_alt || combo.requires_shift;
+                    let is_special = key_to_hid(&combo.target_key).is_some();
+                    let is_printable = key_to_ascii(&combo.target_key).is_some();
+                    
+                    if has_modifiers || is_special {
+                        // Send as HID report (has modifiers OR is special key)
+                        if let Some(hid_report) = self.build_hid_report(&combo) {
+                            println!("Sending HID keycode report (hex): {:02x?}", hid_report);
+                            let _ = self.input_event_tx.try_send(InputEvent::Keycode(hid_report.to_vec()));
+                        }
+                    } else if is_printable {
+                        // No modifiers, not special - send as printing character
+                        let _ = self.input_event_tx.try_send(InputEvent::RDevEvent(event));
+                    }
+                }
             }
             EventType::KeyRelease(key) => {
                 self.pressed_keys.remove(&key);
             }
             _ => {}
-        }
-                
-        if self.current_state.enable_key_capture {
-            let _ = self.input_event_tx.try_send(InputEvent::RDevEvent(event));
         }
     }
 
@@ -209,49 +308,53 @@ impl SysInputHandler {
 
     fn handle_disable_clipboard_capture_event(&mut self, key: Key) {
         // Check for Ctrl+Alt+V combo
-        if key == rdev::Key::KeyV {
-            let has_ctrl = self.pressed_keys.contains(&rdev::Key::ControlLeft) || self.pressed_keys.contains(&rdev::Key::ControlRight);
-            let has_alt = self.pressed_keys.contains(&rdev::Key::Alt);
-            
-            if has_ctrl && has_alt {
-                let new_state = AppState {
-                    enable_clipboard_capture: !self.current_state.enable_clipboard_capture,
-                    ..self.current_state.clone()
-                };
-                println!("Ctrl+Alt+V pressed - toggling clipboard capture to: {}", new_state.enable_clipboard_capture);
-                Notification::new()
-                    .summary(&format!("Clipboard Capture {}", 
-                    if new_state.enable_clipboard_capture { "Enabled" } else { "Disabled" }))
-                    .timeout(notify_rust::Timeout::Milliseconds(2000))
-                    .show()
-                    .ok();
+        let combo = KeyCombo {
+            requires_ctrl: true,
+            requires_alt: true,
+            requires_shift: false,
+            target_key: rdev::Key::KeyV,
+        };
+        
+        if key == rdev::Key::KeyV && self.is_combo_active(&combo) {
+            let new_state = AppState {
+                enable_clipboard_capture: !self.current_state.enable_clipboard_capture,
+                ..self.current_state.clone()
+            };
+            println!("Ctrl+Alt+V pressed - toggling clipboard capture to: {}", new_state.enable_clipboard_capture);
+            Notification::new()
+                .summary(&format!("Clipboard Capture {}", 
+                if new_state.enable_clipboard_capture { "Enabled" } else { "Disabled" }))
+                .timeout(notify_rust::Timeout::Milliseconds(2000))
+                .show()
+                .ok();
 
-                self.update_state(new_state);
-            }
+            self.update_state(new_state);
         }
     }
 
     fn handle_disable_key_capture_event(&mut self, key: Key) {
         // Check for Ctrl+Alt+C combo
-        if key == rdev::Key::KeyC {
-            let has_ctrl = self.pressed_keys.contains(&rdev::Key::ControlLeft) || self.pressed_keys.contains(&rdev::Key::ControlRight);
-            let has_alt = self.pressed_keys.contains(&rdev::Key::Alt);
-            
-            if has_ctrl && has_alt {
-                let new_state = AppState {
-                    enable_key_capture: !self.current_state.enable_key_capture,
-                    ..self.current_state.clone()
-                };
-                println!("Ctrl+Alt+C pressed - toggling key capture to: {}", new_state.enable_key_capture);
-                Notification::new()
-                    .summary(&format!("Key Capture {}", 
-                    if new_state.enable_key_capture { "Enabled" } else { "Disabled" }))
-                    .timeout(notify_rust::Timeout::Milliseconds(2000))
-                    .show()
-                    .ok();
+        let combo = KeyCombo {
+            requires_ctrl: true,
+            requires_alt: true,
+            requires_shift: false,
+            target_key: rdev::Key::KeyC,
+        };
+        
+        if key == rdev::Key::KeyC && self.is_combo_active(&combo) {
+            let new_state = AppState {
+                enable_key_capture: !self.current_state.enable_key_capture,
+                ..self.current_state.clone()
+            };
+            println!("Ctrl+Alt+C pressed - toggling key capture to: {}", new_state.enable_key_capture);
+            Notification::new()
+                .summary(&format!("Key Capture {}", 
+                if new_state.enable_key_capture { "Enabled" } else { "Disabled" }))
+                .timeout(notify_rust::Timeout::Milliseconds(2000))
+                .show()
+                .ok();
 
-                self.update_state(new_state);
-            }
+            self.update_state(new_state);
         }
     }
 }
