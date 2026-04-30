@@ -247,7 +247,6 @@ impl BLEInterface {
                                 .filter(|c| c.is_ascii_graphic() || *c == ' ')
                                 .collect::<String>();
                             if !sanitized.is_empty() {
-                                println!("Sending clipboard text ({} chars) in chunks", sanitized.len());
                                 self.send_keyboard_stream(sanitized.as_str()).await
                                     .unwrap_or_else(|e| eprintln!("Failed to send clipboard text: {e}"));
                             } else {

@@ -41,6 +41,7 @@ pub struct AppState {
     pub password_protected: bool,
     pub settings_file_path: Option<String>,
     pub enable_key_capture: bool,
+    pub enable_clipboard_capture: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
