@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use rdev::{Event, EventType, Key};
-use tokio::sync::{mpsc, watch};
+use tokio::{sync::{mpsc, watch}, time::Timeout};
 use toothpaste_desktop_core::{AppCommand, AppState};
 use arboard::Clipboard;
 use notify_rust::Notification;
@@ -222,6 +222,7 @@ impl SysInputHandler {
                 Notification::new()
                     .summary(&format!("Clipboard Capture {}", 
                     if new_state.enable_clipboard_capture { "Enabled" } else { "Disabled" }))
+                    .timeout(notify_rust::Timeout::Milliseconds(2000))
                     .show()
                     .ok();
 
@@ -245,6 +246,7 @@ impl SysInputHandler {
                 Notification::new()
                     .summary(&format!("Key Capture {}", 
                     if new_state.enable_key_capture { "Enabled" } else { "Disabled" }))
+                    .timeout(notify_rust::Timeout::Milliseconds(2000))
                     .show()
                     .ok();
 
