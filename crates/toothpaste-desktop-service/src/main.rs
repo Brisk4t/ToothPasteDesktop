@@ -32,7 +32,9 @@ async fn main() {
         enable_key_capture: true,
     });
 
-    let mut captured_state = app_state_rx.borrow().clone();
+    // Subscribe a receiver for the listen closure to read current state on each key event.
+    // We can't use app_state_rx directly since it's consumed by auto_connect_task below.
+    let listen_state_rx = app_state_tx.subscribe();
 
 
 
@@ -119,13 +121,12 @@ async fn main() {
                     let has_alt = pressed_keys.contains(&rdev::Key::Alt);
                     
                     if has_ctrl && has_alt {
-                        let current_state = captured_state.clone();
+                        let current_state = listen_state_rx.borrow().clone();
                         let new_state = AppState {
                             enable_key_capture: !current_state.enable_key_capture,
                             ..current_state
                         };
                         println!("Ctrl+Alt+C pressed - toggling key capture to: {}", new_state.enable_key_capture);
-                        captured_state = new_state.clone();
                         let _ = app_state_tx.send(new_state);
                     }
                 }
@@ -138,7 +139,7 @@ async fn main() {
         }
         
         // Forward input events if key capture is enabled
-        if captured_state.enable_key_capture {
+        if listen_state_rx.borrow().enable_key_capture {
             let _ = input_event_tx.try_send(event);
         }
     })

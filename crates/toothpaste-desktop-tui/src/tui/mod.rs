@@ -1,10 +1,15 @@
+mod screens;
 mod ui;
+
 use ui::ui;
+use screens::{
+    ConnectedScreen, DeviceListScreen, HomeScreen, InputHandler, NavSignal, PairingInputScreen,
+    Screen, ScreenVariant,
+};
 
 use std::io;
 use std::time::Duration;
 
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
 };
@@ -14,39 +19,28 @@ use crossterm::terminal::{
 };
 use ratatui::DefaultTerminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::widgets::ListState;
 use tokio::sync::{mpsc, watch};
 use toothpaste_desktop_core::{AppCommand, AppState, AuthState, DeviceState};
 
-pub enum CurrentScreen {
-    Home,
-    Scanning,
-    DeviceList,
-    Connected,
-    PairingInput,
-}
 
 pub struct ToothPasteTUI {
-    pub current_screen: CurrentScreen,
+    current_screen: ScreenVariant,
+    screen_stack: Vec<ScreenVariant>,
     pub app_state: AppState,
-    pub list_state: ListState,
-    pub pair_input: String,
-    pub status: String,
-    pub exit: bool,
+    exit: bool,
 
     app_state_rx: watch::Receiver<AppState>,
     cmd_tx: mpsc::Sender<AppCommand>,
 }
 
+
 impl ToothPasteTUI {
     fn new(app_state_rx: watch::Receiver<AppState>, cmd_tx: mpsc::Sender<AppCommand>) -> Self {
         let app_state = app_state_rx.borrow().clone();
         Self {
-            current_screen: CurrentScreen::Home,
+            current_screen: ScreenVariant::Home(HomeScreen::new(cmd_tx.clone())),
+            screen_stack: Vec::new(),
             app_state,
-            list_state: ListState::default(),
-            pair_input: String::new(),
-            status: String::new(),
             exit: false,
             app_state_rx,
             cmd_tx,
@@ -70,177 +64,93 @@ impl ToothPasteTUI {
     }
 
     fn sync_app_state(&mut self) {
-        if self.app_state_rx.has_changed().unwrap_or(false) {
-            self.app_state = (*self.app_state_rx.borrow_and_update()).clone();
+        if !self.app_state_rx.has_changed().unwrap_or(false) {
+            return;
+        }
+        self.app_state = (*self.app_state_rx.borrow_and_update()).clone();
 
-            // Auto-transition: scanning → device list when results arrive
-            if matches!(self.current_screen, CurrentScreen::Scanning)
-                && !self.app_state.devices.is_empty()
-            {
-                self.current_screen = CurrentScreen::DeviceList;
-                self.list_state.select(Some(0));
-                self.status = format!("{} device(s) found", self.app_state.devices.len());
-            }
+        // Auto-transition: Scanning → DeviceList when devices are found
+        if matches!(self.current_screen, ScreenVariant::Scanning(_))
+            && !self.app_state.devices.is_empty()
+        {
+            self.current_screen = ScreenVariant::DeviceList(DeviceListScreen::new(
+                self.cmd_tx.clone(),
+                self.app_state_rx.clone(),
+                &self.app_state,
+            ));
+        }
 
-            // Auto-transition: device list → connected when device connects
-            if matches!(
-                self.current_screen,
-                CurrentScreen::DeviceList | CurrentScreen::Scanning
-            ) && self.app_state.connected_device.is_some()
-            {
-                self.current_screen = CurrentScreen::Connected;
-                self.list_state.select(Some(0));
-                self.status = String::new();
-            }
+        // Auto-transition: Scanning/DeviceList → Connected when a device connects
+        if matches!(
+            self.current_screen,
+            ScreenVariant::Scanning(_) | ScreenVariant::DeviceList(_)
+        ) && self.app_state.connected_device.is_some()
+        {
+            self.current_screen = ScreenVariant::Connected(ConnectedScreen::new(
+                self.cmd_tx.clone(),
+                self.app_state_rx.clone(),
+            ));
+        }
 
-            // Auto-transition: connected → pairing input when device signals it doesn't recognise us
-            if matches!(self.current_screen, CurrentScreen::Connected) {
-                if let Some(device) = &self.app_state.connected_device {
-                    if matches!(
-                        &device.state,
-                        DeviceState::Connected { auth_state: AuthState::AuthenticationFailed, .. }
-                    ) {
-                        self.current_screen = CurrentScreen::PairingInput;
-                        self.pair_input.clear();
-                        self.status = "Device requires pairing. Enter peer public key (base64):".into();
+        // Auto-transition: Connected → PairingInput when device signals auth failure
+        if matches!(self.current_screen, ScreenVariant::Connected(_)) {
+            if let Some(device) = &self.app_state.connected_device {
+                if matches!(
+                    &device.state,
+                    DeviceState::Connected {
+                        auth_state: AuthState::AuthenticationFailed,
+                        ..
                     }
+                ) {
+                    let connected = std::mem::replace(
+                        &mut self.current_screen,
+                        ScreenVariant::PairingInput(PairingInputScreen::new(
+                            self.cmd_tx.clone(),
+                            self.app_state_rx.clone(),
+                        )),
+                    );
+                    self.screen_stack.push(connected);
                 }
             }
         }
     }
 
     fn handle_keypress(&mut self, key: KeyEvent) {
-        match self.current_screen {
-            CurrentScreen::PairingInput => self.handle_pairing_key(key),
-            _ => self.handle_nav_key(key),
-        }
+        let signal = match key.code {
+            KeyCode::Backspace => self.current_screen.handle_back_key(key),
+            KeyCode::Enter => self.current_screen.handle_enter_key(key),
+            _ => self.current_screen.handle_nav_key(key),
+        };
+        self.apply_nav_signal(signal);
     }
 
-    fn handle_nav_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
-                if matches!(self.current_screen, CurrentScreen::Home) {
-                    self.exit = true;
+    fn apply_nav_signal(&mut self, signal: NavSignal) {
+        match signal {
+            NavSignal::Back => {
+                if let Some(prev) = self.screen_stack.pop() {
+                    self.current_screen = prev;
                 } else {
-                    self.current_screen = CurrentScreen::Home;
-                    self.list_state.select(None);
-                    self.status = String::new();
+                    self.exit = true;
                 }
             }
-            KeyCode::Down => self.list_state.select_next(),
-            KeyCode::Up => self.list_state.select_previous(),
-            KeyCode::Char('s') | KeyCode::Char('S') => {
-                if matches!(
-                    self.current_screen,
-                    CurrentScreen::Home | CurrentScreen::DeviceList
-                ) {
-                    self.send_command(AppCommand::ScanForDevices);
-                    self.current_screen = CurrentScreen::Scanning;
-                    self.status = "Scanning for devices...".into();
-                    self.list_state.select(None);
-                }
+            NavSignal::Screen(new_screen) => {
+                let prev = std::mem::replace(&mut self.current_screen, new_screen);
+                self.screen_stack.push(prev);
             }
-            KeyCode::Char('x') | KeyCode::Char('X') => {
-                self.send_command(AppCommand::KillService);
-                self.status = "Shutting down service...".into();
-            }
-            KeyCode::Char('d') | KeyCode::Char('D') => {
-                if matches!(self.current_screen, CurrentScreen::Connected) {
-                    self.send_command(AppCommand::DisconnectDevice);
-                    self.current_screen = CurrentScreen::Home;
-                    self.status = String::new();
-                }
-            }
-            KeyCode::Enter => self.handle_enter(),
-            _ => {}
+            NavSignal::Command => {}
         }
     }
 
-    fn handle_enter(&mut self) {
-        match self.current_screen {
-            CurrentScreen::Home => match self.list_state.selected() {
-                Some(0) => {
-                    self.send_command(AppCommand::ScanForDevices);
-                    self.current_screen = CurrentScreen::Scanning;
-                    self.status = "Scanning for devices...".into();
-                    self.list_state.select(None);
-                }
-                Some(1) => {
-                    self.send_command(AppCommand::KillService);
-                    self.status = "Shutting down service...".into();
-                }
-                Some(2) => self.exit = true,
-                _ => {}
-            },
-            CurrentScreen::Scanning => {
-                if !self.app_state.devices.is_empty() {
-                    self.current_screen = CurrentScreen::DeviceList;
-                    self.list_state.select(Some(0));
-                    self.status = format!("{} device(s) found", self.app_state.devices.len());
-                }
-            }
-            CurrentScreen::DeviceList => {
-                if let Some(idx) = self.list_state.selected() {
-                    if let Some(device) = self.app_state.devices.get(idx).cloned() {
-                        self.status = format!("Connecting to {}…", device.name);
-                        self.send_command(AppCommand::ConnectToDevice(device));
-                    }
-                }
-            }
-            CurrentScreen::PairingInput => self.submit_pair_input(),
-            CurrentScreen::Connected => {
-                let authenticated = auth_label(&self.app_state) == "Authenticated";
-                match self.list_state.selected() {
-                    Some(0) if !authenticated => {
-                        self.current_screen = CurrentScreen::PairingInput;
-                        self.pair_input.clear();
-                        self.status = "Enter peer public key (base64):".into();
-                    }
-                    Some(idx) if authenticated && idx == 0 || !authenticated && idx == 1 => {
-                        self.send_command(AppCommand::DisconnectDevice);
-                        self.current_screen = CurrentScreen::Home;
-                        self.status = String::new();
-                    }
-                    _ => {}
-                }
-            }
-        }
+    pub fn current_screen(&mut self) -> &mut ScreenVariant {
+        &mut self.current_screen
     }
 
-    fn handle_pairing_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Enter => self.submit_pair_input(),
-            KeyCode::Backspace => {
-                self.pair_input.pop();
-            }
-            KeyCode::Esc => {
-                self.pair_input.clear();
-                self.current_screen = CurrentScreen::Connected;
-                self.status = "Pairing cancelled.".into();
-            }
-            KeyCode::Char(c) => self.pair_input.push(c),
-            _ => {}
-        }
+    pub fn status(&self) -> &str {
+        self.current_screen.status()
     }
 
-    fn submit_pair_input(&mut self) {
-        let trimmed = self.pair_input.trim().to_string();
-        match BASE64.decode(&trimmed) {
-            Ok(bytes) if bytes.len() == 33 => {
-                if let Some(device) = self.app_state.connected_device.clone() {
-                    self.send_command(AppCommand::PairDevice { device, pub_key: trimmed });
-                    self.pair_input.clear();
-                    self.current_screen = CurrentScreen::Connected;
-                    self.status = "Pairing key sent.".into();
-                }
-            }
-            Ok(_) => self.status = "Invalid key: expected 33 bytes (compressed P-256).".into(),
-            Err(_) => self.status = "Invalid base64. Try again.".into(),
-        }
-    }
-
-    fn send_command(&self, cmd: AppCommand) {
-        let _ = self.cmd_tx.try_send(cmd);
+    pub fn nav_hints(&self) -> Vec<&'static str> {
+        self.current_screen.nav_hints()
     }
 }
 
@@ -263,19 +173,22 @@ pub fn auth_label(state: &AppState) -> &'static str {
 pub fn firmware_label(state: &AppState) -> String {
     match &state.connected_device {
         Some(d) => match &d.state {
-            DeviceState::Connected {
-                firmware_version, ..
-            } => firmware_version.clone(),
+            DeviceState::Connected { firmware_version, .. } => firmware_version.clone(),
             _ => "—".into(),
         },
         None => "—".into(),
     }
 }
 
+pub fn capture_label(state: &AppState) -> &'static str {
+    if state.enable_key_capture { "Enabled" } else { "Disabled" }
+}
+
 // ── entry point ───────────────────────────────────────────────────────────────
 
 pub fn start_tui(
-    app_state_rx: watch::Receiver<AppState>, cmd_tx: mpsc::Sender<AppCommand>,
+    app_state_rx: watch::Receiver<AppState>,
+    cmd_tx: mpsc::Sender<AppCommand>,
 ) -> io::Result<()> {
     enable_raw_mode()?;
     execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
