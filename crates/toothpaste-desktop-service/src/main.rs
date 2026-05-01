@@ -12,7 +12,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep, Duration};
 use toothpaste_desktop_core::{AppCommand, AppState, IPC_SOCKET_NAME, IpcMessage, SETTINGS_FILE_DEFAULT_PATH};
-use toothpaste_desktop_service::{BLEInterface, input::handler::{InputEvent, SysInputHandler}, storage::StorageService};
+use toothpaste_desktop_service::{BLEInterface, input::handler::{InputEvent, SysInputHandler}, mcp, storage::StorageService};
 use std::fs;
 
 #[tokio::main]
@@ -102,9 +102,14 @@ async fn main() {
         tui_connected_tx,
     ));
     tokio::spawn(auto_connect_task(
-        app_state_rx,
-        app_command_tx,
+        app_state_rx.clone(),
+        app_command_tx.clone(),
         tui_connected_rx,
+    ));
+    tokio::spawn(mcp::run_mcp_server(
+        app_command_tx,
+        input_event_tx.clone(),
+        app_state_rx,
     ));
 
     // Initialize the key handler struct

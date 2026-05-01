@@ -257,6 +257,10 @@ impl BLEInterface {
                             self.send_keycode(&codes).await
                                 .unwrap_or_else(|e| eprintln!("Failed to send keycode: {e}"));
                         }
+                        InputEvent::ConsumerControl(code) => {
+                            self.send_consumer_control(code).await
+                                .unwrap_or_else(|e| eprintln!("Failed to send consumer control: {e}"));
+                        }
                     }
                 }
 

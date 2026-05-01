@@ -11,6 +11,7 @@ pub enum InputEvent {
     RDevEvent(Event),
     Clipboard(String),
     Keycode(Vec<u8>),
+    ConsumerControl(u32),
 }
 
 /// Represents a key combo (modifiers + target key)
@@ -165,10 +166,6 @@ impl SysInputHandler {
                     println!("Current pressed keys: {:?}, constructed combo: ctrl={}, alt={}, shift={}, key={:?}", 
                         self.pressed_keys, combo.requires_ctrl, combo.requires_alt, combo.requires_shift, combo.target_key);
                     
-                    // Decision tree:
-                    // 1. If has modifiers -> send as HID report (for any key: special or printing)
-                    // 2. Else if special key (in HID map) -> send as HID report
-                    // 3. Else if printing char -> send as RDevEvent
                     let has_modifiers = combo.requires_ctrl || combo.requires_alt || combo.requires_shift;
                     let is_special = key_to_hid(&combo.target_key).is_some();
                     let is_printable = key_to_ascii(&combo.target_key).is_some();
