@@ -5,7 +5,7 @@ use axum::{Extension, Json, Router, response::Response, routing::post};
 use rdev::{Button, Event, EventType};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Mutex, mpsc, watch};
 use tokio::time::timeout;
 use toothpaste_desktop_core::{AppCommand, AppState, Device, DeviceState};
 
@@ -18,6 +18,7 @@ struct McpState {
     app_command_tx: mpsc::Sender<AppCommand>,
     input_event_tx: mpsc::Sender<InputEvent>,
     app_state_rx: watch::Receiver<AppState>,
+    serial_buffer: Arc<Mutex<Vec<String>>>,
 }
 
 #[derive(Deserialize)]
@@ -33,8 +34,9 @@ pub async fn run_mcp_server(
     app_command_tx: mpsc::Sender<AppCommand>,
     input_event_tx: mpsc::Sender<InputEvent>,
     app_state_rx: watch::Receiver<AppState>,
+    serial_buffer: Arc<Mutex<Vec<String>>>,
 ) {
-    let state = Arc::new(McpState { app_command_tx, input_event_tx, app_state_rx });
+    let state = Arc::new(McpState { app_command_tx, input_event_tx, app_state_rx, serial_buffer });
 
     let app = Router::new()
         .route("/mcp", post(handle_mcp))
@@ -175,6 +177,20 @@ fn tools_list() -> Value {
                 },
                 "required": ["action"]
             }
+        },
+        {
+            "name": "read_serial",
+            "description": "Read buffered SERIAL_DATA responses from the ToothPaste device (data sent to its USB serial port is echoed back over BLE). Use this to capture output from commands sent to the device.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "clear": {
+                        "type": "boolean",
+                        "description": "Clear the buffer after reading (default: true)"
+                    }
+                },
+                "required": []
+            }
         }
     ]})
 }
@@ -222,6 +238,10 @@ async fn tools_call(state: Arc<McpState>, params: Value) -> Result<Value, Value>
                 .ok_or_else(|| json!({"code": -32602, "message": "missing action"}))?
                 .to_string();
             tool_media_control(state, action).await
+        }
+        "read_serial" => {
+            let clear = args["clear"].as_bool().unwrap_or(true);
+            tool_read_serial(state, clear).await
         }
         _ => Err(json!({"code": -32602, "message": format!("unknown tool: {name}")})),
     }
@@ -378,6 +398,17 @@ async fn tool_media_control(state: Arc<McpState>, action: String) -> Result<Valu
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+async fn tool_read_serial(state: Arc<McpState>, clear: bool) -> Result<Value, Value> {
+    let mut buf = state.serial_buffer.lock().await;
+    let lines: Vec<String> = buf.clone();
+    if clear { buf.clear(); }
+    drop(buf);
+    Ok(json!({
+        "content": [{ "type": "text", "text": json!({ "lines": lines, "count": lines.len() }).to_string() }],
+        "isError": false
+    }))
+}
 
 fn tool_ok(msg: impl Into<String>) -> Value {
     json!({ "content": [{ "type": "text", "text": msg.into() }], "isError": false })

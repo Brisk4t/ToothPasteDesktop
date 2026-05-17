@@ -94,6 +94,7 @@ async fn main() {
 
 
     // Spawn BLE and IPC tasks --------------------------------------------------------------------------------
+    let serial_buffer = ble.serial_buffer.clone();
     tokio::spawn(ble_task(ble, app_command_rx));
     tokio::spawn(ipc_server(
         app_state_rx.clone(),
@@ -110,6 +111,7 @@ async fn main() {
         app_command_tx,
         input_event_tx.clone(),
         app_state_rx,
+        serial_buffer,
     ));
 
     // Initialize the key handler struct

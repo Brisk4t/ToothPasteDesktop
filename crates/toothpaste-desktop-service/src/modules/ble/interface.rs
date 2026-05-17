@@ -12,6 +12,7 @@ use tokio::sync::watch::Sender;
 use toothpaste_desktop_core::{AppCommand, AppState, AuthState, Device, DeviceState};
 use toothpaste_desktop_proto::packets;
 use toothpaste_desktop_proto::toothpaste::{DataPacket, EncryptedData, data_packet};
+use toothpaste_desktop_proto::toothpaste::response_packet::ResponseType;
 
 use super::BleManager;
 use crate::modules::crypto::EcdhContext;
@@ -91,6 +92,7 @@ pub struct BLEInterface {
     device_id: Option<String>,
     app_state_channel_tx: Sender<AppState>,
     command_rx: mpsc::Receiver<InputEvent>,
+    pub serial_buffer: Arc<Mutex<Vec<String>>>,
 }
 
 impl BLEInterface {
@@ -105,7 +107,8 @@ impl BLEInterface {
             ecdh,
             device_id: None,
             app_state_channel_tx,
-            command_rx: command_rx,
+            command_rx,
+            serial_buffer: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -195,11 +198,17 @@ impl BLEInterface {
                         Err(e) => { eprintln!("Failed to decode ResponsePacket: {e}"); continue; }
                     };
 
-                    let _response = match toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::try_from(packet.response_type) {
-                        Ok(toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::Keepalive)   => handler.on_keepalive().await,
-                        Ok(toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::PeerUnknown) => handler.on_peer_unknown().await,
-                        Ok(toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::PeerKnown)   => handler.on_peer_known(&packet.firmware_version).await,
-                        Ok(toothpaste_desktop_proto::toothpaste::response_packet::ResponseType::Challenge)   => handler.on_challenge(&packet.challenge_data, &packet.firmware_version).await,
+                    let _response = match ResponseType::try_from(packet.response_type) {
+                        Ok(ResponseType::Keepalive)   => handler.on_keepalive().await,
+                        Ok(ResponseType::PeerUnknown) => handler.on_peer_unknown().await,
+                        Ok(ResponseType::PeerKnown)   => handler.on_peer_known(&packet.firmware_version).await,
+                        Ok(ResponseType::Challenge)   => handler.on_challenge(&packet.challenge_data, &packet.firmware_version).await,
+                        Ok(ResponseType::SerialData)  => {
+                            if !packet.serial_data.is_empty() {
+                                self.serial_buffer.lock().await.push(packet.serial_data.clone());
+                            }
+                            None
+                        }
                         Err(_) => { eprintln!("Unknown response type: {}", packet.response_type); None }
                     };
                 }
