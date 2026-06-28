@@ -72,14 +72,24 @@ fn render_side_panel(frame: &mut Frame, app: &ToothPasteTUI, area: Rect) {
             Span::raw(&state.app_version),
         ]),
         Line::from(vec![
-            Span::styled("Key Capture:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Key Capture:       ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                capture_label(state),
-                Style::default().fg(if state.enable_key_capture {
-                    Color::Green
-                } else {
-                    Color::Red
-                }),
+                capture_label(state.enable_key_capture),
+                Style::default().fg(if state.enable_key_capture { Color::Green } else { Color::Red }),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Clipboard Capture: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                capture_label(state.enable_clipboard_capture),
+                Style::default().fg(if state.enable_clipboard_capture { Color::Green } else { Color::Red }),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Mouse Capture:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                capture_label(state.enable_mouse_capture),
+                Style::default().fg(if state.enable_mouse_capture { Color::Green } else { Color::Red }),
             ),
         ]),
         Line::from(""),

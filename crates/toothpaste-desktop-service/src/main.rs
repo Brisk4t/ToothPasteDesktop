@@ -29,8 +29,9 @@ async fn main() {
         connected_device: None,
         password_protected: false,
         settings_file_path: Some(SETTINGS_FILE_DEFAULT_PATH.to_string()),
-        enable_key_capture: true,
+        enable_key_capture: false,
         enable_clipboard_capture: false,
+        enable_mouse_capture: false,
     });
 
     // Subscribe a receiver for the listen closure to read current state on each key event.

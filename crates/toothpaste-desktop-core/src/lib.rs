@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 pub const IPC_SOCKET_NAME: &str = "toothpaste-desktop";
 pub const APP_VERSION: &str = "0.1.0";
 pub const APP_STRING: &str = "Toothpaste Desktop";
-pub const SETTINGS_FILE_DEFAULT_PATH: &str = "F:\\VSCode\\ClipBoard\\ToothPasteDesktop\\crates\\toothpaste-desktop-service\\toothpaste_storage.json";
+pub const SETTINGS_FILE_DEFAULT_PATH: &str = ".\\toothpaste_storage.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AuthState {
@@ -42,6 +42,7 @@ pub struct AppState {
     pub settings_file_path: Option<String>,
     pub enable_key_capture: bool,
     pub enable_clipboard_capture: bool,
+    pub enable_mouse_capture: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

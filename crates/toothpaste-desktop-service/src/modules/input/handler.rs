@@ -151,6 +151,7 @@ impl SysInputHandler {
                 // Check for special combos first (these don't send to device, they control the app)
                 self.handle_disable_key_capture_event(key);
                 self.handle_disable_clipboard_capture_event(key);
+                self.handle_disable_mouse_capture_event(key);
                 self.handle_clipboard_event(key);   // Handle clipboard capture (Ctrl+V)
 
                 if self.current_state.enable_key_capture {
@@ -191,7 +192,7 @@ impl SysInputHandler {
 
 
     fn handle_mouse_click(&mut self, event: Event) {
-        if self.current_state.enable_key_capture {
+        if self.current_state.enable_mouse_capture {
             let _ = self.input_event_tx.try_send(InputEvent::RDevEvent(event));
         }
     }
@@ -203,8 +204,7 @@ impl SysInputHandler {
                 (delta_x as f64, delta_y as f64),
                 event.time,
                 self.scroll_debounce_threshold_ms,
-                self.current_state.enable_key_capture,
-
+                self.current_state.enable_mouse_capture,
                 |delta| EventType::Wheel {
                     delta_x: delta.0 as i64,
                     delta_y: delta.1 as i64,
@@ -218,15 +218,15 @@ impl SysInputHandler {
             // Calculate delta from last observed position (every event)
             let delta_x = x - self.mouse_last_position.0;
             let delta_y = y - self.mouse_last_position.1;
-            
+
             // Always update to current position
             self.mouse_last_position = (x, y);
-            
+
             self.process_accumulated_event(
                 (delta_x, delta_y),
                 event.time,
                 self.mouse_debounce_threshold_ms,
-                self.current_state.enable_key_capture,
+                self.current_state.enable_mouse_capture,
                 |delta| EventType::MouseMove {
                     x: delta.0,
                     y: delta.1,
@@ -321,6 +321,32 @@ impl SysInputHandler {
             Notification::new()
                 .summary(&format!("Clipboard Capture {}", 
                 if new_state.enable_clipboard_capture { "Enabled" } else { "Disabled" }))
+                .timeout(notify_rust::Timeout::Milliseconds(2000))
+                .show()
+                .ok();
+
+            self.update_state(new_state);
+        }
+    }
+
+    fn handle_disable_mouse_capture_event(&mut self, key: Key) {
+        // Check for Ctrl+Alt+M combo
+        let combo = KeyCombo {
+            requires_ctrl: true,
+            requires_alt: true,
+            requires_shift: false,
+            target_key: rdev::Key::KeyM,
+        };
+
+        if key == rdev::Key::KeyM && self.is_combo_active(&combo) {
+            let new_state = AppState {
+                enable_mouse_capture: !self.current_state.enable_mouse_capture,
+                ..self.current_state.clone()
+            };
+            println!("Ctrl+Alt+M pressed - toggling mouse capture to: {}", new_state.enable_mouse_capture);
+            Notification::new()
+                .summary(&format!("Mouse Capture {}",
+                if new_state.enable_mouse_capture { "Enabled" } else { "Disabled" }))
                 .timeout(notify_rust::Timeout::Milliseconds(2000))
                 .show()
                 .ok();

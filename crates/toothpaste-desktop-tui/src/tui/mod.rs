@@ -204,8 +204,8 @@ pub fn firmware_label(state: &AppState) -> String {
     }
 }
 
-pub fn capture_label(state: &AppState) -> &'static str {
-    if state.enable_key_capture { "Enabled" } else { "Disabled" }
+pub fn capture_label(enabled: bool) -> &'static str {
+    if enabled { "Enabled" } else { "Disabled" }
 }
 
 // ── entry point ───────────────────────────────────────────────────────────────
